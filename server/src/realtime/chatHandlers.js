@@ -1,4 +1,6 @@
+import { can } from '../lib/permissions.js';
 import { postMessage } from '../modules/chat/chat.service.js';
+import { meetingRoom } from './channels.js';
 import { chatSendSchema } from './schemas.js';
 import { ackFrom, createRateLimiter, fail } from './socketUtils.js';
 
@@ -17,6 +19,7 @@ export function registerChatHandlers({ socket, me, isJoined }) {
   socket.on('chat:send', async (...args) => {
     const reply = ackFrom(args);
     if (!isJoined()) return reply(fail('NOT_IN_MEETING', 'Join the meeting before sending messages'));
+    if (!can(me.role, 'chat.send')) return reply(fail('FORBIDDEN', 'You can’t send messages'));
     if (!allowMessage()) {
       return reply(fail('RATE_LIMITED', 'You’re sending messages too quickly. Wait a moment and try again.'));
     }
@@ -33,7 +36,7 @@ export function registerChatHandlers({ socket, me, isJoined }) {
       });
       const payload = message.toPublic();
       // A retried message was already broadcast the first time.
-      if (created) socket.to(me.code).emit('chat:message', payload);
+      if (created) socket.to(meetingRoom(me.code)).emit('chat:message', payload);
       reply({ ok: true, message: payload });
     } catch (err) {
       console.error('chat:send failed', err);

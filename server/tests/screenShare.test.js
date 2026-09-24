@@ -1,6 +1,15 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import request from 'supertest';
-import { clearDb, connectSocket, emitWithAck, nextEvent, startTestDb, startTestServer } from './helpers.js';
+import {
+  clearDb,
+  connectSocket,
+  createMeetingAs,
+  emitWithAck,
+  nextEvent,
+  signUp,
+  startTestDb,
+  startTestServer,
+} from './helpers.js';
 
 let stopDb;
 let server;
@@ -24,8 +33,8 @@ afterEach(() => {
 });
 
 async function createMeeting() {
-  const res = await request(server.app).post('/api/meetings').send({});
-  return res.body.meeting.code;
+  const host = await signUp(server.app, { name: 'Owner' });
+  return (await createMeetingAs(host)).code;
 }
 
 async function enter(code, displayName, { join = true } = {}) {

@@ -1,19 +1,23 @@
 import { apiRequest } from './http.js';
 
-export function createMeeting({ title }) {
-  return apiRequest('/meetings', { method: 'POST', body: { title } });
+// Signed-in only. settings: { allowGuests?, waitingRoom? }
+export function createMeeting({ title, settings }) {
+  return apiRequest('/meetings', { method: 'POST', body: { title, settings } });
 }
 
 export function getMeeting(code, { signal } = {}) {
   return apiRequest(`/meetings/${encodeURIComponent(code)}`, { signal });
 }
 
-// -> { participant, token, iceServers, meeting }
-export function joinMeeting(code, { displayName, hostKey }) {
-  return apiRequest(`/meetings/${encodeURIComponent(code)}/join`, {
-    method: 'POST',
-    body: { displayName, ...(hostKey && { hostKey }) },
-  });
+// -> { participant, admission: 'admitted' | 'waiting', token, rtcConfig, meeting }
+// The server decides the role from the session cookie (host / member / guest).
+export function joinMeeting(code, { displayName }) {
+  return apiRequest(`/meetings/${encodeURIComponent(code)}/join`, { method: 'POST', body: { displayName } });
+}
+
+// -> { meetings } hosted or attended while signed in
+export function getMeetingHistory({ signal } = {}) {
+  return apiRequest('/me/meetings', { signal });
 }
 
 // -> { messages } oldest first; 410 once the meeting has ended (messages are deleted)

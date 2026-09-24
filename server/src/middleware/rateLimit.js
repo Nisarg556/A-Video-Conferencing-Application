@@ -22,3 +22,6 @@ export const apiLimiter = limiter({ windowMs: 60_000, limit: 120 });
 export const createMeetingLimiter = limiter({ windowMs: 60_000, limit: 10 });
 export const lookupMeetingLimiter = limiter({ windowMs: 60_000, limit: 30 });
 export const joinMeetingLimiter = limiter({ windowMs: 60_000, limit: 20 });
+
+// Slows password guessing and mass sign-ups.
+export const authLimiter = limiter({ windowMs: 60_000, limit: 10 });

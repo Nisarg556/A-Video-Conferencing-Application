@@ -23,6 +23,8 @@ export async function apiRequest(path, { method = 'GET', body, token, signal } =
       method,
       headers,
       body: body === undefined ? undefined : JSON.stringify(body),
+      // Send the httpOnly session cookie (same-origin in dev; see README for production).
+      credentials: 'include',
       signal,
     });
   } catch (err) {

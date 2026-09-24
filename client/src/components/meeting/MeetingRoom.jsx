@@ -4,7 +4,7 @@ import { useActiveSpeaker } from '../../hooks/useActiveSpeaker.js';
 import { useChat } from '../../hooks/useChat.js';
 import { useMeetingRoom } from '../../hooks/useMeetingRoom.js';
 import { CopyLink } from '../CopyLink.jsx';
-import { ScreenShareIcon } from '../icons.jsx';
+import { LockIcon, ScreenShareIcon } from '../icons.jsx';
 import { RemoteAudio } from '../RemoteAudio.jsx';
 import { StatusMessage } from '../StatusMessage.jsx';
 import { VideoTile } from '../VideoTile.jsx';
@@ -12,6 +12,7 @@ import { ChatPanel } from './ChatPanel.jsx';
 import { ControlBar } from './ControlBar.jsx';
 import { PeopleList } from './PeopleList.jsx';
 import { SidePanel } from './SidePanel.jsx';
+import { WaitingRoom } from './WaitingRoom.jsx';
 
 /**
  * In-meeting view.
@@ -42,6 +43,15 @@ export function MeetingRoom({ meeting, session, media, onExit }) {
     role: session.participant.role,
   };
   const isHost = self.role === 'host';
+  const [hostError, setHostError] = useState(null);
+
+  // Host actions: the server enforces the permission; we only surface failures.
+  const runHostAction = useCallback(async (action) => {
+    setHostError(null);
+    const result = await action();
+    if (!result.ok) setHostError(result.error.message);
+    return result;
+  }, []);
 
   const chat = useChat({
     socket: room.socket,
@@ -67,7 +77,9 @@ export function MeetingRoom({ meeting, session, media, onExit }) {
       else onExit(isHost ? 'you_ended' : 'host_ended');
     }
     if (room.status === 'replaced') onExit('replaced');
-  }, [room.status, room.endedReason, isHost, onExit]);
+    if (room.status === 'denied' || room.error?.code === 'ADMISSION_DENIED') onExit('denied');
+    if (room.status === 'removed' || room.error?.code === 'REMOVED_FROM_MEETING') onExit('removed');
+  }, [room.status, room.endedReason, room.error, isHost, onExit]);
 
   const togglePanel = useCallback((next) => {
     panelToggleRef.current = document.activeElement;
@@ -104,10 +116,16 @@ export function MeetingRoom({ meeting, session, media, onExit }) {
     }
   }
 
+  // Waiting to be admitted (or still connecting after being told we'll wait).
+  if (room.status === 'waiting' || (room.status === 'connecting' && session.admission === 'waiting')) {
+    return <WaitingRoom meeting={meeting} self={self} media={media} onLeave={handleLeave} />;
+  }
+
   if (room.status === 'error') {
+    const titles = { ROOM_FULL: 'This meeting is full', MEETING_LOCKED: 'This meeting is locked' };
     return (
       <StatusMessage
-        title={room.error?.code === 'ROOM_FULL' ? 'This meeting is full' : 'Couldn’t join the meeting'}
+        title={titles[room.error?.code] ?? 'Couldn’t join the meeting'}
         action={{ to: `/m/${meeting.code}`, label: 'Back to lobby', reloadDocument: true }}
       >
         {room.error?.message}
@@ -161,6 +179,12 @@ export function MeetingRoom({ meeting, session, media, onExit }) {
           </p>
         </div>
         <div className="room-header-status">
+          {room.settings?.locked && (
+            <p className="chip chip-muted" role="status">
+              <LockIcon width="16" height="16" aria-hidden="true" />
+              Locked
+            </p>
+          )}
           {presenterName && (
             <p className="chip" role="status">
               <ScreenShareIcon width="16" height="16" aria-hidden="true" />
@@ -231,13 +255,53 @@ export function MeetingRoom({ meeting, session, media, onExit }) {
                 autoFocus={chatAutoFocus}
               />
             ) : (
-              <PeopleList people={everyone} presenterId={presenterId} speakerId={speakerId} />
+              <PeopleList
+                people={everyone}
+                presenterId={presenterId}
+                speakerId={speakerId}
+                isHost={isHost}
+                lobby={room.lobby}
+                settings={room.settings}
+                onAdmit={(id) => runHostAction(() => room.host.admit(id))}
+                onDeny={(id) => runHostAction(() => room.host.deny(id))}
+                onRemove={(id) => runHostAction(() => room.host.remove(id))}
+                onUpdateSettings={(changes) => runHostAction(() => room.host.updateSettings(changes))}
+              />
             )}
           </SidePanel>
         )}
       </div>
 
       <div className="room-alerts">
+        {isHost && room.lobby.length > 0 && (
+          <div className="lobby-banner" role="status" aria-live="polite">
+            <span>
+              <strong>{room.lobby[0].displayName}</strong>
+              {room.lobby.length > 1 ? ` and ${room.lobby.length - 1} more are` : ' is'} waiting to join
+            </span>
+            <span className="row">
+              <button type="button" className="btn btn-primary btn-small" onClick={() => runHostAction(() => room.host.admit(room.lobby[0].participantId))}>
+                Admit
+              </button>
+              <button type="button" className="btn btn-secondary btn-small" onClick={() => runHostAction(() => room.host.deny(room.lobby[0].participantId))}>
+                Deny
+              </button>
+              {room.lobby.length > 1 && (
+                <button type="button" className="link-button" onClick={() => togglePanel('people')}>
+                  See all
+                </button>
+              )}
+            </span>
+          </div>
+        )}
+        {hostError && (
+          <p className="alert" role="alert">
+            {hostError}{' '}
+            <button type="button" className="link-button" onClick={() => setHostError(null)}>
+              Dismiss
+            </button>
+          </p>
+        )}
         {screen.error && (
           <p className="alert" role="alert">
             {screen.error}{' '}
@@ -269,6 +333,7 @@ export function MeetingRoom({ meeting, session, media, onExit }) {
         onTogglePanel={togglePanel}
         unread={chat.unread}
         participantCount={everyone.length}
+        waitingCount={isHost ? room.lobby.length : 0}
         isHost={isHost}
         ending={ending}
         onLeave={handleLeave}

@@ -23,6 +23,7 @@ export function ControlBar({
   onTogglePanel,
   unread,
   participantCount,
+  waitingCount = 0,
   isHost,
   ending,
   onLeave,
@@ -75,11 +76,18 @@ export function ControlBar({
           onClick={() => onTogglePanel('people')}
           aria-expanded={panel === 'people'}
           aria-controls="side-panel"
-          aria-label={`People (${participantCount})`}
+          aria-label={
+            waitingCount > 0 ? `People (${participantCount}), ${waitingCount} waiting` : `People (${participantCount})`
+          }
           title="People"
         >
           <PeopleIcon />
           <span className="control-label">{participantCount}</span>
+          {waitingCount > 0 && (
+            <span className="control-badge" aria-hidden="true">
+              {waitingCount}
+            </span>
+          )}
         </button>
         <button
           type="button"

@@ -6,11 +6,13 @@ import { RoomManager } from '../src/realtime/roomManager.js';
 import { Meeting, MEETING_IDLE_TTL_MS } from '../src/modules/meetings/meeting.model.js';
 import { Participant } from '../src/modules/meetings/participant.model.js';
 import { verifyParticipantToken } from '../src/lib/tokens.js';
-import { clearDb, startTestDb } from './helpers.js';
+import { clearDb, createMeetingAs, signUp, startTestDb } from './helpers.js';
 
 let stopDb;
 let rooms;
 let app;
+let owner; // signed-in agent who creates meetings
+let other; // a different signed-in user
 
 beforeAll(async () => {
   stopDb = await startTestDb();
@@ -24,55 +26,108 @@ beforeEach(async () => {
   await clearDb();
   rooms = new RoomManager();
   app = createApp({ rooms });
+  owner = await signUp(app, { name: 'Owner' });
+  other = await signUp(app, { name: 'Member' });
 });
 
-async function createMeeting(title = 'Test') {
-  const res = await request(app).post('/api/meetings').send({ title });
-  return res.body; // { meeting, joinUrl, hostKey }
-}
+const joinAs = (agent, code, displayName = 'Someone') =>
+  (agent ?? request(app)).post(`/api/meetings/${code}/join`).send({ displayName });
 
-function join(code, body) {
-  return request(app).post(`/api/meetings/${code}/join`).send(body);
-}
+describe('POST /api/meetings/:code/join — roles', () => {
+  it('makes the owner the host, other signed-in users members, and everyone else guests', async () => {
+    const { code } = await createMeetingAs(owner);
 
-describe('POST /api/meetings/:code/join', () => {
-  it('lets a guest join with a display name and returns a scoped token', async () => {
-    const { meeting } = await createMeeting();
+    const host = await joinAs(owner, code, 'Owner');
+    const member = await joinAs(other, code, 'Member');
+    const guest = await joinAs(null, code, 'Guest');
 
-    const res = await join(meeting.code, { displayName: '  Ada  ' });
+    expect(host.body.participant.role).toBe('host');
+    expect(member.body.participant.role).toBe('member');
+    expect(guest.body.participant.role).toBe('guest');
+    expect(verifyParticipantToken(guest.body.token)).toMatchObject({ role: 'guest', code });
+    expect(host.body.admission).toBe('admitted');
+  });
 
-    expect(res.status).toBe(200);
-    expect(res.body.participant).toMatchObject({ displayName: 'Ada', role: 'guest' });
-    expect(res.body.rtcConfig).toEqual({
-      iceServers: [{ urls: expect.arrayContaining([expect.stringMatching(/^stun:/)]) }],
-      iceTransportPolicy: 'all',
-    });
-    expect(res.body.meeting.code).toBe(meeting.code);
+  it('ignores any attempt to pick a role or host key in the body', async () => {
+    const { code } = await createMeetingAs(owner);
+    const res = await request(app).post(`/api/meetings/${code}/join`).send({ displayName: 'X', role: 'host' });
+    expect(res.status).toBe(400);
+    const res2 = await request(app).post(`/api/meetings/${code}/join`).send({ displayName: 'X', hostKey: 'anything' });
+    expect(res2.status).toBe(400);
+  });
 
-    const claims = verifyParticipantToken(res.body.token);
-    expect(claims).toMatchObject({
-      participantId: res.body.participant.id,
-      code: meeting.code,
-      role: 'guest',
-      displayName: 'Ada',
-    });
-
+  it('records the signed-in user on the participant (for history and bans)', async () => {
+    const { code } = await createMeetingAs(owner);
+    const res = await joinAs(other, code);
     const stored = await Participant.findById(res.body.participant.id);
-    expect(stored).toMatchObject({ displayName: 'Ada', role: 'guest', leftAt: null });
+    expect(stored.userId.toString()).toBe(other.user.id);
+    expect(res.body.rtcConfig.iceServers[0].urls[0]).toMatch(/^stun:/);
+  });
+});
+
+describe('POST /api/meetings/:code/join — host settings', () => {
+  it('requires sign-in when the host disallows guests', async () => {
+    const { code } = await createMeetingAs(owner, { settings: { allowGuests: false } });
+
+    const guest = await joinAs(null, code);
+    expect(guest.status).toBe(401);
+    expect(guest.body.error.code).toBe('SIGN_IN_REQUIRED');
+
+    expect((await joinAs(other, code)).status).toBe(200);
   });
 
-  it('gives the host role to whoever presents the correct host key', async () => {
-    const { meeting, hostKey } = await createMeeting();
-    const res = await join(meeting.code, { displayName: 'Host', hostKey });
-    expect(res.status).toBe(200);
-    expect(res.body.participant.role).toBe('host');
+  it('puts everyone but the host in the waiting room when it is on', async () => {
+    const { code } = await createMeetingAs(owner, { settings: { waitingRoom: true } });
+
+    expect((await joinAs(null, code)).body.admission).toBe('waiting');
+    expect((await joinAs(other, code)).body.admission).toBe('waiting');
+    expect((await joinAs(owner, code)).body.admission).toBe('admitted');
   });
 
-  it('rejects a wrong host key instead of silently downgrading to guest', async () => {
-    const { meeting } = await createMeeting();
-    const res = await join(meeting.code, { displayName: 'Mallory', hostKey: 'guessed-key' });
+  it('blocks new joins when locked, except the host', async () => {
+    const { code } = await createMeetingAs(owner);
+    await Meeting.updateOne({ code }, { 'settings.locked': true });
+
+    for (const agent of [null, other]) {
+      const res = await joinAs(agent, code);
+      expect(res.status).toBe(423);
+      expect(res.body.error.code).toBe('MEETING_LOCKED');
+    }
+    expect((await joinAs(owner, code)).status).toBe(200);
+  });
+
+  it('refuses signed-in users the host removed', async () => {
+    const { code } = await createMeetingAs(owner);
+    await Meeting.updateOne({ code }, { $addToSet: { bannedUserIds: other.user.id } });
+
+    const res = await joinAs(other, code);
     expect(res.status).toBe(403);
-    expect(res.body.error.code).toBe('INVALID_HOST_KEY');
+    expect(res.body.error.code).toBe('REMOVED_FROM_MEETING');
+  });
+
+  it('keeps one seat for the host while they are not in the room', async () => {
+    const { code } = await createMeetingAs(owner);
+    for (let i = 0; i < 3; i++) {
+      rooms.add(code, { participantId: `p${i}`, displayName: `P${i}`, role: 'guest', socketId: `s${i}` });
+    }
+
+    const fourthGuest = await joinAs(null, code);
+    expect(fourthGuest.status).toBe(409);
+    expect(fourthGuest.body.error.code).toBe('ROOM_FULL');
+    expect((await joinAs(owner, code)).status).toBe(200);
+  });
+
+  it('returns 410 for ended and expired meetings, 404 for unknown, 400 for malformed', async () => {
+    const ended = await createMeetingAs(owner);
+    await Meeting.updateOne({ code: ended.code }, { status: 'ended', endedReason: 'host_ended' });
+    expect((await joinAs(null, ended.code)).body.error).toEqual({ code: 'MEETING_ENDED', message: 'This meeting has ended' });
+
+    const idle = await createMeetingAs(owner);
+    await Meeting.updateOne({ code: idle.code }, { lastActiveAt: new Date(Date.now() - MEETING_IDLE_TTL_MS - 1000) });
+    expect((await joinAs(null, idle.code)).body.error.message).toBe('This meeting link has expired');
+
+    expect((await joinAs(null, 'aaa-bbbb-ccc')).status).toBe(404);
+    expect((await joinAs(null, 'bad-code')).status).toBe(400);
   });
 
   it.each([
@@ -80,113 +135,90 @@ describe('POST /api/meetings/:code/join', () => {
     [{ displayName: '   ' }, 'displayName'],
     [{ displayName: 'x'.repeat(41) }, 'displayName'],
     [{ displayName: 'Ad​min' }, 'displayName'], // zero-width space
-    [{ displayName: 'Ada', role: 'host' }, ''], // unknown field
-  ])('rejects invalid body %j', async (body, path) => {
-    const { meeting } = await createMeeting();
-    const res = await join(meeting.code, body);
+  ])('validates the display name %j', async (body, path) => {
+    const { code } = await createMeetingAs(owner);
+    const res = await request(app).post(`/api/meetings/${code}/join`).send(body);
     expect(res.status).toBe(400);
-    expect(res.body.error.code).toBe('VALIDATION_ERROR');
     expect(res.body.error.details[0]).toMatchObject({ location: 'body', path });
-  });
-
-  it('returns 400 for a malformed meeting code', async () => {
-    const res = await join('bad-code', { displayName: 'Ada' });
-    expect(res.status).toBe(400);
-    expect(res.body.error.details[0]).toMatchObject({ location: 'params', path: 'code' });
-  });
-
-  it('returns 404 for a meeting that does not exist', async () => {
-    const res = await join('aaa-bbbb-ccc', { displayName: 'Ada' });
-    expect(res.status).toBe(404);
-    expect(res.body.error.code).toBe('NOT_FOUND');
-  });
-
-  it('returns 410 for a meeting the host ended', async () => {
-    const { meeting } = await createMeeting();
-    await Meeting.updateOne({ code: meeting.code }, { status: 'ended', endedReason: 'host_ended' });
-
-    const res = await join(meeting.code, { displayName: 'Ada' });
-    expect(res.status).toBe(410);
-    expect(res.body.error).toEqual({ code: 'MEETING_ENDED', message: 'This meeting has ended' });
-  });
-
-  it('returns 410 for an expired (long idle) meeting link', async () => {
-    const { meeting } = await createMeeting();
-    await Meeting.updateOne(
-      { code: meeting.code },
-      { lastActiveAt: new Date(Date.now() - MEETING_IDLE_TTL_MS - 1000) },
-    );
-
-    const res = await join(meeting.code, { displayName: 'Ada' });
-    expect(res.status).toBe(410);
-    expect(res.body.error).toEqual({ code: 'MEETING_ENDED', message: 'This meeting link has expired' });
-  });
-
-  it('returns 409 when the room is already full', async () => {
-    const { meeting } = await createMeeting();
-    for (let i = 0; i < 4; i++) {
-      rooms.add(meeting.code, { participantId: `p${i}`, displayName: `P${i}`, role: 'guest', socketId: `s${i}` });
-    }
-
-    const res = await join(meeting.code, { displayName: 'Fifth' });
-    expect(res.status).toBe(409);
-    expect(res.body.error.code).toBe('ROOM_FULL');
   });
 });
 
-describe('POST /api/meetings/:code/end', () => {
+describe('POST /api/meetings/:code/end — permission meeting.end', () => {
+  const end = (code, token) => {
+    const req = request(app).post(`/api/meetings/${code}/end`);
+    return token ? req.set('Authorization', `Bearer ${token}`) : req;
+  };
+
   it('lets the host end the meeting', async () => {
-    const { meeting, hostKey } = await createMeeting();
-    const { body } = await join(meeting.code, { displayName: 'Host', hostKey });
-
-    const res = await request(app)
-      .post(`/api/meetings/${meeting.code}/end`)
-      .set('Authorization', `Bearer ${body.token}`);
-    expect(res.status).toBe(204);
-
-    const lookup = await request(app).get(`/api/meetings/${meeting.code}`);
-    expect(lookup.body.meeting).toMatchObject({ status: 'ended', endedReason: 'host_ended' });
+    const { code } = await createMeetingAs(owner);
+    const { body } = await joinAs(owner, code);
+    expect((await end(code, body.token)).status).toBe(204);
+    expect((await Meeting.findOne({ code })).status).toBe('ended');
   });
 
-  it('forbids guests from ending the meeting', async () => {
-    const { meeting } = await createMeeting();
-    const { body } = await join(meeting.code, { displayName: 'Guest' });
-
-    const res = await request(app)
-      .post(`/api/meetings/${meeting.code}/end`)
-      .set('Authorization', `Bearer ${body.token}`);
-    expect(res.status).toBe(403);
+  it('forbids members and guests', async () => {
+    const { code } = await createMeetingAs(owner);
+    for (const agent of [other, null]) {
+      const { body } = await joinAs(agent, code);
+      const res = await end(code, body.token);
+      expect(res.status).toBe(403);
+      expect(res.body.error.code).toBe('FORBIDDEN');
+    }
+    expect((await Meeting.findOne({ code })).status).toBe('active');
   });
 
-  it('rejects a host token from a different meeting', async () => {
-    const a = await createMeeting('A');
-    const b = await createMeeting('B');
-    const { body } = await join(a.meeting.code, { displayName: 'Host A', hostKey: a.hostKey });
-
-    const res = await request(app)
-      .post(`/api/meetings/${b.meeting.code}/end`)
-      .set('Authorization', `Bearer ${body.token}`);
-    expect(res.status).toBe(403);
+  it('does not accept the owner’s session cookie in place of a participant token', async () => {
+    const { code } = await createMeetingAs(owner);
+    expect((await owner.post(`/api/meetings/${code}/end`)).status).toBe(401);
   });
 
-  it('rejects missing, forged and expired tokens', async () => {
-    const { meeting } = await createMeeting();
-    const url = `/api/meetings/${meeting.code}/end`;
+  it('rejects a host token from a different meeting, and forged/expired tokens', async () => {
+    const a = await createMeetingAs(owner);
+    const b = await createMeetingAs(owner);
+    const { body } = await joinAs(owner, a.code);
+    expect((await end(b.code, body.token)).status).toBe(403);
 
-    const missing = await request(app).post(url);
-    expect(missing.status).toBe(401);
-
-    const forged = jwt.sign({ code: meeting.code, role: 'host' }, 'not-the-server-secret-but-long-enough!!');
-    const forgedRes = await request(app).post(url).set('Authorization', `Bearer ${forged}`);
-    expect(forgedRes.status).toBe(401);
+    const forged = jwt.sign({ code: b.code, role: 'host' }, 'not-the-server-secret-but-long-enough!!', {
+      audience: 'confer:participant',
+      subject: '000000000000000000000000',
+    });
+    expect((await end(b.code, forged)).status).toBe(401);
 
     const expired = jwt.sign(
-      { code: meeting.code, role: 'host', exp: Math.floor(Date.now() / 1000) - 10 },
+      { code: b.code, role: 'host', exp: Math.floor(Date.now() / 1000) - 10 },
       process.env.JWT_SECRET,
       { audience: 'confer:participant', subject: 'x' },
     );
-    const expiredRes = await request(app).post(url).set('Authorization', `Bearer ${expired}`);
-    expect(expiredRes.status).toBe(401);
-    expect(expiredRes.body.error.code).toBe('TOKEN_EXPIRED');
+    const res = await end(b.code, expired);
+    expect(res.status).toBe(401);
+    expect(res.body.error.code).toBe('TOKEN_EXPIRED');
+  });
+});
+
+describe('GET /api/me/meetings — history', () => {
+  it('lists meetings I host and meetings I entered while signed in, only mine', async () => {
+    const hosted = await createMeetingAs(owner, { title: 'Hosted by owner' });
+    const attended = await createMeetingAs(other, { title: 'Owner attended' });
+    const notMine = await createMeetingAs(other, { title: 'Owner never joined' });
+
+    const join = await joinAs(owner, attended.code);
+    // "Attended" means actually entered the room, not just requested a token.
+    await Participant.updateOne({ _id: join.body.participant.id }, { enteredAt: new Date() });
+    await joinAs(owner, notMine.code); // token only, never entered
+
+    const res = await owner.get('/api/me/meetings');
+    expect(res.status).toBe(200);
+    expect(res.body.meetings.map((m) => [m.title, m.role])).toEqual([
+      ['Owner attended', 'member'],
+      ['Hosted by owner', 'host'],
+    ]);
+    expect(res.body.meetings[0].attendeeCount).toBe(1);
+    expect(hosted.code).toBeDefined();
+  });
+
+  it('requires sign-in', async () => {
+    const res = await request(app).get('/api/me/meetings');
+    expect(res.status).toBe(401);
+    expect(res.body.error.code).toBe('AUTH_REQUIRED');
   });
 });

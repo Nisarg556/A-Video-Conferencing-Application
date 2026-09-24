@@ -20,10 +20,3 @@ export function requireParticipant(req, _res, next) {
   req.participant = participant;
   next();
 }
-
-export function requireHost(req, _res, next) {
-  if (req.participant?.role !== 'host') {
-    return next(AppError.forbidden('Only the host can do that'));
-  }
-  next();
-}

@@ -1,3 +1,5 @@
+import { can } from '../lib/permissions.js';
+import { meetingRoom } from './channels.js';
 import { ackFrom, fail } from './socketUtils.js';
 
 /**
@@ -16,6 +18,7 @@ export function registerScreenShareHandlers({ socket, me, rooms, isJoined }) {
   socket.on('screen:start', (...args) => {
     const reply = ackFrom(args);
     if (!isJoined()) return reply(fail('NOT_IN_MEETING', 'Join the meeting before sharing your screen'));
+    if (!can(me.role, 'screen.share')) return reply(fail('FORBIDDEN', 'You can’t share your screen'));
 
     const current = rooms.getPresenter(me.code);
     if (current && current !== me.participantId) {
@@ -26,7 +29,7 @@ export function registerScreenShareHandlers({ socket, me, rooms, isJoined }) {
     // Idempotent: re-claiming after a reconnect is fine and doesn't re-announce.
     if (current !== me.participantId) {
       rooms.setPresenter(me.code, me.participantId);
-      socket.to(me.code).emit('presenter:changed', { participantId: me.participantId });
+      socket.to(meetingRoom(me.code)).emit('presenter:changed', { participantId: me.participantId });
     }
     reply({ ok: true });
   });
@@ -34,6 +37,6 @@ export function registerScreenShareHandlers({ socket, me, rooms, isJoined }) {
   socket.on('screen:stop', () => {
     if (!isJoined() || rooms.getPresenter(me.code) !== me.participantId) return;
     rooms.setPresenter(me.code, null);
-    socket.to(me.code).emit('presenter:changed', { participantId: null });
+    socket.to(meetingRoom(me.code)).emit('presenter:changed', { participantId: null });
   });
 }

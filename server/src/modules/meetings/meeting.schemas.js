@@ -21,6 +21,14 @@ export const createMeetingSchema = {
         .max(MEETING_TITLE_MAX, `Title must be at most ${MEETING_TITLE_MAX} characters`)
         .optional()
         .default(''),
+      settings: z
+        .object({
+          allowGuests: z.boolean().optional(),
+          waitingRoom: z.boolean().optional(),
+        })
+        .strict()
+        .optional()
+        .default({}),
     })
     .strict(),
 };
@@ -41,7 +49,22 @@ export const joinMeetingSchema = {
         // Block control and invisible formatting characters (e.g. zero-width
         // spaces) that could be used to spoof another participant's name.
         .regex(/^[^\p{Cc}\p{Cf}]+$/u, 'Display name contains invalid characters'),
-      hostKey: z.string().min(1).max(128).optional(),
     })
     .strict(),
 };
+
+export const historyQuerySchema = {
+  query: z.object({
+    limit: z.coerce.number().int().min(1).max(100).default(50),
+  }),
+};
+
+// Socket: host changes settings mid-meeting (any subset, at least one).
+export const updateSettingsSchema = z
+  .object({
+    allowGuests: z.boolean().optional(),
+    waitingRoom: z.boolean().optional(),
+    locked: z.boolean().optional(),
+  })
+  .strict()
+  .refine((s) => Object.keys(s).length > 0, 'No settings to update');

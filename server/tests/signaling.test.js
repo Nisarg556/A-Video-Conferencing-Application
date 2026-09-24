@@ -3,6 +3,8 @@ import request from 'supertest';
 import {
   clearDb,
   connectSocket,
+  createMeetingAs,
+  signUp,
   emitWithAck,
   nextEvent,
   startTestDb,
@@ -33,8 +35,8 @@ afterEach(() => {
 const OFFER = { type: 'offer', connectionId: 'conn-abc123', sdp: 'v=0\r\no=- 1 2 IN IP4 127.0.0.1\r\n' };
 
 async function createMeeting() {
-  const res = await request(server.app).post('/api/meetings').send({});
-  return res.body.meeting.code;
+  const host = await signUp(server.app, { name: 'Owner' });
+  return (await createMeetingAs(host)).code;
 }
 
 /** REST join + socket connect + room:join. */

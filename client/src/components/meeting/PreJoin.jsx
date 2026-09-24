@@ -1,21 +1,38 @@
 import { useState } from 'react';
+import { Link } from 'react-router';
 import { joinMeeting } from '../../api/meetings.js';
+import { useAuth } from '../../auth/AuthContext.jsx';
 import { DISPLAY_NAME_MAX } from '../../lib/meetingCode.js';
-import { getHostKey, getSavedDisplayName, saveDisplayName } from '../../lib/storage.js';
+import { getSavedDisplayName, saveDisplayName } from '../../lib/storage.js';
 import { CopyLink } from '../CopyLink.jsx';
 import { MediaControls } from '../MediaControls.jsx';
 import { MicLevel } from '../MicLevel.jsx';
 import { VideoTile } from '../VideoTile.jsx';
 
-/** Lobby: camera/mic preview, device pickers, display name, then join. */
+// Join errors that mean "you can't join this way" rather than "try again".
+const BLOCKING_ERRORS = new Set(['SIGN_IN_REQUIRED', 'MEETING_LOCKED', 'REMOVED_FROM_MEETING']);
+
+/**
+ * Lobby: camera/mic preview, device pickers, display name, then join.
+ * The hints here (sign-in required, locked, waiting room) are for a good UX
+ * only; the server enforces every one of them on join.
+ */
 export function PreJoin({ meeting, media, onJoined, onMeetingEnded }) {
-  const hostKey = getHostKey(meeting.code);
-  const [displayName, setDisplayName] = useState(getSavedDisplayName);
+  const auth = useAuth();
+  const signedIn = auth.status === 'signedIn';
+  const isHost = meeting.viewerIsHost;
+  // Signed in: your account name. Guest: the name you used last time on this device.
+  const [displayName, setDisplayName] = useState(() => auth.user?.name || getSavedDisplayName());
   const [nameError, setNameError] = useState(null);
   const [joinError, setJoinError] = useState(null);
   const [joining, setJoining] = useState(false);
 
+  const signInLink = `/login?next=${encodeURIComponent(`/m/${meeting.code}`)}`;
+  const needsSignIn = !isHost && !signedIn && !meeting.settings.allowGuests;
+  const locked = !isHost && meeting.settings.locked;
+  const willWait = !isHost && meeting.settings.waitingRoom;
   const isFull = meeting.participantCount >= meeting.maxParticipants;
+  const blocked = needsSignIn || locked || BLOCKING_ERRORS.has(joinError?.code);
 
   async function handleJoin(event) {
     event.preventDefault();
@@ -28,7 +45,7 @@ export function PreJoin({ meeting, media, onJoined, onMeetingEnded }) {
     setJoining(true);
     setJoinError(null);
     try {
-      const session = await joinMeeting(meeting.code, { displayName: name, hostKey });
+      const session = await joinMeeting(meeting.code, { displayName: name });
       saveDisplayName(name);
       onJoined(session);
     } catch (err) {
@@ -36,7 +53,7 @@ export function PreJoin({ meeting, media, onJoined, onMeetingEnded }) {
       if (err.code === 'MEETING_ENDED') return onMeetingEnded(err.message);
       const nameIssue = err.details?.find((d) => d.path === 'displayName');
       if (nameIssue) setNameError(nameIssue.message);
-      else setJoinError(err.message);
+      else setJoinError(err);
     }
   }
 
@@ -56,47 +73,75 @@ export function PreJoin({ meeting, media, onJoined, onMeetingEnded }) {
       <form className="card stack" onSubmit={handleJoin} noValidate>
         <div className="lobby-heading">
           <h1>{meeting.title || 'Untitled meeting'}</h1>
-          {hostKey && <span className="badge">Host</span>}
+          {isHost && <span className="badge">You’re the host</span>}
         </div>
         <p className="muted">
+          Hosted by {isHost ? 'you' : meeting.hostName} ·{' '}
           {meeting.participantCount === 0
-            ? 'No one else is here yet.'
-            : `${meeting.participantCount} of ${meeting.maxParticipants} people are in this meeting.`}
+            ? 'no one is here yet'
+            : `${meeting.participantCount} of ${meeting.maxParticipants} people inside`}
         </p>
 
-        <div className="field">
-          <label htmlFor="displayName">Your name</label>
-          <input
-            id="displayName"
-            className="input"
-            value={displayName}
-            onChange={(e) => {
-              setDisplayName(e.target.value);
-              if (nameError) setNameError(null);
-            }}
-            maxLength={DISPLAY_NAME_MAX}
-            placeholder="e.g. Ada Lovelace"
-            autoComplete="name"
-            autoFocus={!displayName}
-            aria-invalid={Boolean(nameError)}
-            aria-describedby={nameError ? 'name-error' : undefined}
-          />
-          {nameError && (
-            <p id="name-error" className="error-text" role="alert">
-              {nameError}
+        {needsSignIn || joinError?.code === 'SIGN_IN_REQUIRED' ? (
+          <div className="notice">
+            <p>
+              <strong>Sign in to join.</strong> The host only allows people with an account.
             </p>
-          )}
-        </div>
-
-        {joinError && (
-          <p className="alert" role="alert">
-            {joinError}
+            <Link to={signInLink} className="btn btn-primary">
+              Sign in
+            </Link>
+          </div>
+        ) : locked || joinError?.code === 'MEETING_LOCKED' ? (
+          <p className="notice" role="status">
+            <strong>This meeting is locked.</strong> The host isn’t letting anyone new in right now.
           </p>
-        )}
-        {isFull && !joinError && <p className="alert">This meeting is full right now.</p>}
+        ) : joinError?.code === 'REMOVED_FROM_MEETING' ? (
+          <p className="notice" role="status">
+            <strong>You were removed from this meeting</strong> and can’t rejoin it.
+          </p>
+        ) : (
+          <>
+            <div className="field">
+              <label htmlFor="displayName">Your name</label>
+              <input
+                id="displayName"
+                className="input"
+                value={displayName}
+                onChange={(e) => {
+                  setDisplayName(e.target.value);
+                  if (nameError) setNameError(null);
+                }}
+                maxLength={DISPLAY_NAME_MAX}
+                placeholder="e.g. Ada Lovelace"
+                autoComplete="name"
+                autoFocus={!displayName}
+                aria-invalid={Boolean(nameError)}
+                aria-describedby={nameError ? 'name-error' : undefined}
+              />
+              {nameError && (
+                <p id="name-error" className="error-text" role="alert">
+                  {nameError}
+                </p>
+              )}
+            </div>
 
-        <button type="submit" className="btn btn-primary" disabled={joining}>
-          {joining ? 'Joining…' : 'Join meeting'}
+            {!signedIn && (
+              <p className="muted small">
+                Joining as a guest. <Link to={signInLink}>Sign in</Link> to keep this meeting in your history.
+              </p>
+            )}
+            {willWait && <p className="muted small">The host will let you in from the waiting room.</p>}
+            {joinError && (
+              <p className="alert" role="alert">
+                {joinError.message}
+              </p>
+            )}
+            {isFull && !joinError && <p className="alert">This meeting is full right now.</p>}
+          </>
+        )}
+
+        <button type="submit" className="btn btn-primary" disabled={joining || blocked}>
+          {joining ? 'Joining…' : willWait ? 'Ask to join' : 'Join meeting'}
         </button>
 
         <CopyLink url={`${window.location.origin}/m/${meeting.code}`} />

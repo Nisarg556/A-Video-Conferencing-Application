@@ -33,6 +33,10 @@ export class AppError extends Error {
     return new AppError(409, code, message);
   }
 
+  static locked(code, message) {
+    return new AppError(423, code, message);
+  }
+
   static gone(code, message) {
     return new AppError(410, code, message);
   }

@@ -88,3 +88,10 @@ export const SendIcon = (p) => (
     <path d="M22 2 11 13M22 2l-7 20-4-9-9-4z" />
   </Icon>
 );
+
+export const LockIcon = (p) => (
+  <Icon {...p}>
+    <rect x="4" y="11" width="16" height="10" rx="2" />
+    <path d="M8 11V7a4 4 0 0 1 8 0v4" />
+  </Icon>
+);

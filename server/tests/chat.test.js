@@ -1,7 +1,15 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import request from 'supertest';
 import { Message } from '../src/modules/chat/message.model.js';
-import { clearDb, connectSocket, emitWithAck, startTestDb, startTestServer } from './helpers.js';
+import {
+  clearDb,
+  connectSocket,
+  createMeetingAs,
+  emitWithAck,
+  signUp,
+  startTestDb,
+  startTestServer,
+} from './helpers.js';
 
 let stopDb;
 let server;
@@ -28,12 +36,12 @@ afterEach(() => {
 const newClientMsgId = () => `msg-${Date.now()}-${++msgCounter}`;
 
 async function createMeeting() {
-  const res = await request(server.app).post('/api/meetings').send({});
-  return { code: res.body.meeting.code, hostKey: res.body.hostKey };
+  const host = await signUp(server.app, { name: 'Owner' });
+  return { code: (await createMeetingAs(host)).code, host };
 }
 
-async function enter(code, displayName, { hostKey, join = true } = {}) {
-  const res = await request(server.app).post(`/api/meetings/${code}/join`).send({ displayName, hostKey });
+async function enter(code, displayName, { agent, join = true } = {}) {
+  const res = await (agent ?? request(server.app)).post(`/api/meetings/${code}/join`).send({ displayName });
   const socket = await connectSocket(server.url, res.body.token);
   sockets.push(socket);
   if (join) await emitWithAck(socket, 'room:join', {});
@@ -200,8 +208,8 @@ describe('GET /api/meetings/:code/messages', () => {
   });
 
   it('deletes all messages when the meeting ends, and history then returns 410', async () => {
-    const { code, hostKey } = await createMeeting();
-    const host = await enter(code, 'Host', { hostKey });
+    const { code, host: hostAgent } = await createMeeting();
+    const host = await enter(code, 'Host', { agent: hostAgent });
     await send(host.socket, 'bye');
     expect(await Message.countDocuments()).toBe(1);
 

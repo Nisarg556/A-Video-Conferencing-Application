@@ -18,10 +18,5 @@ export function writeStored(key, value) {
   }
 }
 
-// The host key proves "I created this meeting". It is returned once by the
-// API and kept in this browser only.
-export const saveHostKey = (code, hostKey) => writeStored(`hostKey:${code}`, hostKey);
-export const getHostKey = (code) => readStored(`hostKey:${code}`);
-
 export const saveDisplayName = (name) => writeStored('displayName', name);
 export const getSavedDisplayName = () => readStored('displayName') ?? '';

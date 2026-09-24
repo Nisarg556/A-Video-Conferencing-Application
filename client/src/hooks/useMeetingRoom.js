@@ -9,7 +9,15 @@ function upsertPeer(peers, peer) {
   return [...peers.filter((p) => p.participantId !== peer.participantId), peer].sort(byJoinTime);
 }
 
-const INITIAL_STATE = { status: 'connecting', self: null, peers: [], presenterId: null, error: null };
+const INITIAL_STATE = {
+  status: 'connecting',
+  self: null,
+  peers: [],
+  presenterId: null,
+  settings: null, // { allowGuests, waitingRoom, locked }
+  lobby: [], // people waiting to be admitted (hosts only)
+  error: null,
+};
 
 /**
  * Joins the meeting over Socket.IO and runs the WebRTC mesh.
@@ -20,7 +28,8 @@ const INITIAL_STATE = { status: 'connecting', self: null, peers: [], presenterId
  * Outgoing video is the screen while sharing, otherwise the camera — swapped
  * with replaceTrack, so starting/stopping a share never renegotiates.
  *
- * status: 'connecting' | 'joined' | 'reconnecting' | 'error' | 'ended' | 'replaced'
+ * status: 'connecting' | 'waiting' | 'joined' | 'reconnecting' | 'error'
+ *       | 'ended' | 'replaced' | 'denied' | 'removed'
  * peers[i]: { participantId, displayName, role, media, stream, connectionState }
  */
 export function useMeetingRoom({ token, rtcConfig, audioTrack, cameraTrack, micOn }) {
@@ -55,9 +64,10 @@ export function useMeetingRoom({ token, rtcConfig, audioTrack, cameraTrack, micO
     setSocket(socket);
     const update = (patch) => setState((prev) => ({ ...prev, ...patch }));
 
-    // Runs on the first connect AND after every automatic reconnect: the
-    // server rebuilds our presence, and we re-offer to everyone.
-    socket.on('connect', async () => {
+    // Runs on the first connect, after every automatic reconnect (the server
+    // rebuilds our presence and we re-offer to everyone), and when the host
+    // admits us from the waiting room.
+    async function joinRoom() {
       try {
         const ack = await socket.timeout(5000).emitWithAck('room:join', { media: latest.current.mediaState });
         if (!ack.ok) {
@@ -65,11 +75,17 @@ export function useMeetingRoom({ token, rtcConfig, audioTrack, cameraTrack, micO
           socket.disconnect();
           return;
         }
+        if (ack.waiting) {
+          update({ status: 'waiting', settings: ack.settings });
+          return;
+        }
         setState({
           status: 'joined',
           self: ack.self,
           peers: ack.peers.sort(byJoinTime),
           presenterId: ack.presenterId,
+          settings: ack.settings,
+          lobby: ack.lobby ?? [],
           error: null,
         });
         setJoinCount((n) => n + 1);
@@ -78,7 +94,8 @@ export function useMeetingRoom({ token, rtcConfig, audioTrack, cameraTrack, micO
         update({ status: 'error', error: { code: 'TIMEOUT', message: 'The server didn’t respond. Try rejoining.' } });
         socket.disconnect();
       }
-    });
+    }
+    socket.on('connect', joinRoom);
 
     socket.on('connect_error', (err) => {
       if (err.data?.code) {
@@ -121,6 +138,13 @@ export function useMeetingRoom({ token, rtcConfig, audioTrack, cameraTrack, micO
     socket.on('meeting:ended', ({ reason }) => update({ status: 'ended', endedReason: reason }));
     socket.on('session:replaced', () => update({ status: 'replaced' }));
 
+    // Waiting room and host controls.
+    socket.on('lobby:admitted', joinRoom);
+    socket.on('lobby:denied', () => update({ status: 'denied' }));
+    socket.on('participant:removed', () => update({ status: 'removed' }));
+    socket.on('lobby:updated', ({ waiting }) => update({ lobby: waiting }));
+    socket.on('meeting:settings', (settings) => update({ settings }));
+
     socket.connect();
 
     return () => {
@@ -156,6 +180,24 @@ export function useMeetingRoom({ token, rtcConfig, audioTrack, cameraTrack, micO
     socket.disconnect();
   }, [stopScreenShare]);
 
+  // Host actions. The server checks the permission; these just send the request
+  // and resolve with its ack ({ ok } or { ok: false, error }).
+  const hostAction = useCallback(async (event, payload) => {
+    const socket = socketRef.current;
+    if (!socket?.connected) return { ok: false, error: { code: 'OFFLINE', message: 'You’re offline.' } };
+    try {
+      return await socket.timeout(5000).emitWithAck(event, payload);
+    } catch {
+      return { ok: false, error: { code: 'TIMEOUT', message: 'The server didn’t respond.' } };
+    }
+  }, []);
+  const host = {
+    admit: (participantId) => hostAction('lobby:admit', { participantId }),
+    deny: (participantId) => hostAction('lobby:deny', { participantId }),
+    remove: (participantId) => hostAction('participant:remove', { participantId }),
+    updateSettings: (changes) => hostAction('meeting:update', changes),
+  };
+
   const getAudioLevels = useCallback(() => callRef.current?.getAudioLevels() ?? new Map(), []);
 
   const peers = state.peers.map((peer) => {
@@ -163,5 +205,5 @@ export function useMeetingRoom({ token, rtcConfig, audioTrack, cameraTrack, micO
     return { ...peer, stream: link?.stream ?? null, connectionState: link?.connectionState ?? 'new' };
   });
 
-  return { ...state, peers, socket, joinCount, mediaState, screen, getAudioLevels, leave };
+  return { ...state, peers, socket, joinCount, mediaState, screen, host, getAudioLevels, leave };
 }

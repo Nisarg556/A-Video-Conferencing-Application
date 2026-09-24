@@ -4,9 +4,10 @@ A Zoom-style video conferencing app: create a meeting, share a link, and talk in
 
 **Stack:** React 19 + Vite · Node + Express 5 · MongoDB (Mongoose) · Zod validation · Socket.IO signaling · WebRTC mesh
 
-> **Status:** MVP complete. Group video calls for up to 4 people with camera/mic toggles, screen
-> sharing, in-meeting chat, active-speaker highlight, reconnect handling, and a responsive,
-> keyboard-accessible meeting UI. Next: deployment with TURN, then an SFU as a stretch goal.
+> **Status:** Group video calls for up to 4 people with screen sharing, chat, active-speaker
+> highlight and reconnect handling; accounts with meeting history; and host controls (waiting room,
+> admit/deny, remove, lock, guest access, end for all) enforced on the server.
+> Next: deployment with TURN, then an SFU as a stretch goal.
 
 ---
 
@@ -24,17 +25,19 @@ A Zoom-style video conferencing app: create a meeting, share a link, and talk in
 │   │   ├── lib/
 │   │   │   ├── call/               CallManager (mesh) + PeerLink (one RTCPeerConnection) + tests
 │   │   │   └── ...                 screenShare, chatState, activeSpeaker (+ tests), media errors, socket
-│   │   ├── pages/                  Home, Meeting, Left, NotFound, RouteError
+│   │   ├── auth/                   AuthProvider (mirrors the server session for the UI)
+│   │   ├── pages/                  Home, Auth (sign in/up), History, Meeting, Left, NotFound
 │   │   └── router.jsx
 │   └── vite.config.js              dev proxy: /api and /socket.io → server
 ├── server/                         Express API + Socket.IO
 │   ├── src/
 │   │   ├── config/env.js           env validation (fails fast on bad config)
-│   │   ├── lib/                    AppError, crypto (codes, secrets), JWT tokens, domain events
-│   │   ├── middleware/             validate (Zod), auth (participant token), rate limits, errors
-│   │   ├── modules/meetings/       Meeting + Participant models · schemas · service · routes
+│   │   ├── lib/                    AppError, permissions, passwords (scrypt), JWT tokens, meeting codes
+│   │   ├── middleware/             validate (Zod), session (cookie), participant token, rate limits, errors
+│   │   ├── modules/auth, users/    register/login/logout/me · User model
+│   │   ├── modules/meetings/       Meeting + Participant models · join policy · history · routes
 │   │   ├── modules/chat/           Message model · service · history route
-│   │   ├── realtime/               Socket.IO presence, signaling, chat + screen-share handlers, STUN/TURN
+│   │   ├── realtime/               presence + admission, signaling, chat, screen share, host controls, STUN/TURN
 │   │   ├── app.js                  builds the Express app (no listen → testable)
 │   │   └── index.js                HTTP + Socket.IO server, graceful shutdown
 │   └── tests/                      Vitest + Supertest + socket.io-client + in-memory MongoDB
@@ -94,7 +97,7 @@ Browsers only allow camera access on **https://** or **localhost**, so use `loca
 | `PORT` | `4000` | API port |
 | `MONGODB_URI` | — (required) | MongoDB connection string |
 | `CLIENT_URL` | `http://localhost:5173` | CORS allowlist origin and base URL for invite links |
-| `JWT_SECRET` | — (required, ≥ 32 chars) | Signs participant tokens |
+| `JWT_SECRET` | — (required, ≥ 32 chars) | Signs session cookies and participant tokens |
 | `STUN_URLS` | Google public STUN | Comma-separated `stun:` URLs (empty disables) |
 | `TURN_URLS` | – | Comma-separated `turn:`/`turns:` URLs |
 | `TURN_SECRET` | – | coturn shared secret → short-lived per-user credentials (preferred) |
@@ -111,19 +114,68 @@ Browsers only allow camera access on **https://** or **localhost**, so use `loca
 ## Meeting lifecycle
 
 ```
-Home ──create──▶ /m/:code (lobby) ──join──▶ in meeting ──leave──▶ /m/:code/left ──rejoin──▶ lobby
-                     │                          │
-             preview camera/mic          presence via Socket.IO
-             enter display name          host can "End for all"
+Sign in ─▶ Home ──create──▶ /m/:code (lobby) ──join──▶ [waiting room] ──admit──▶ in meeting ──leave──▶ /m/:code/left
+                                 │                                                   │
+                         preview camera/mic                             host: admit/deny, remove,
+                         enter display name                             lock, guests, end for all
 ```
 
-1. **Create** — `POST /api/meetings` returns a code like `kqz-mtrw-xpa` and a one-time `hostKey`, kept in the creator's browser.
-2. **Lobby** — loads the meeting, then asks for camera + mic. Denied, missing and in-use devices each get a specific message and a "Try again"; you can join with devices off.
-3. **Join** — `POST /api/meetings/:code/join` with a display name (plus `hostKey` for the host) returns a participant token.
-4. **Presence + call** — the client connects to Socket.IO with that token, emits `room:join`, then opens a WebRTC connection to every other participant (see [Signaling](#signaling)).
-5. **Leave** — the Leave button, closing the tab, or losing the connection all remove you from the room.
-6. **End** — the host's `POST /api/meetings/:code/end` disconnects everyone; the link then shows "This meeting has ended".
-7. **Expiry** — a meeting nobody has joined or left for 24 hours expires the next time someone opens its link. Ended meetings are deleted by a MongoDB TTL index after 7 days.
+1. **Create** (signed in): `POST /api/meetings` with optional settings (`allowGuests`, `waitingRoom`). The creator is the meeting's **host**.
+2. **Lobby**: loads the meeting, shows the host's rules (sign-in required, locked, waiting room), asks for camera + mic.
+3. **Join**: `POST /api/meetings/:code/join` with a display name. The **server** picks the role from the session cookie and returns a participant token plus `admission: "admitted" | "waiting"`.
+4. **Waiting room** (if on): the socket waits in a separate lobby channel until the host admits or denies them.
+5. **In the meeting**: presence, WebRTC call, screen share, chat (see below).
+6. **Leave / removed / denied / ended**: each ends on a page that explains what happened.
+7. **Expiry**: an empty meeting nobody touched for 24 h expires the next time its link is opened. Ended meetings stay in hosts' history for 90 days (TTL index); their chat is deleted immediately.
+
+## Authentication & authorization
+
+### Accounts and sessions
+- Email + password. Passwords are hashed with **scrypt** (Node built-in, random salt), compared in constant time; 8–128 characters.
+- Login answers `INVALID_CREDENTIALS` for both "unknown email" and "wrong password", and runs a hash either way so timing doesn't reveal which emails exist. Auth routes are rate-limited (10/min/IP).
+- The session is a JWT (`aud: confer:session`, 7 days) in an **httpOnly, SameSite=Lax** cookie (`Secure` in production):
+  - httpOnly: JavaScript (and therefore XSS) can't read it.
+  - SameSite=Lax: browsers don't attach it to cross-site POSTs, so state-changing requests can't be forged from another site (CSRF). All mutations are POST with JSON.
+- **Two token types, never interchangeable** (different JWT audiences): the *session* cookie says who you are; the per-meeting *participant token* (`aud: confer:participant`, 2 h, Bearer + Socket.IO auth) says what you are in one meeting.
+
+### Roles
+The server assigns the role when it issues a participant token; the client can't choose it.
+
+| Role | Who |
+| --- | --- |
+| `host` | The signed-in user who created the meeting |
+| `member` | Any other signed-in user |
+| `guest` | Not signed in (only if the host allows guests) |
+
+### Permissions (`server/src/lib/permissions.js`)
+Every REST route and socket event below checks this table on the server. Hiding a button in the UI is only a convenience.
+
+| Action | host | member | guest | Where enforced |
+| --- | :-: | :-: | :-: | --- |
+| Create a meeting, view own history | signed-in users | ✓ | – | `requireUser` |
+| Join by link | ✓ | ✓ | if `allowGuests` | join policy (`meeting.service.joinMeeting`) |
+| Bypass waiting room / lock / guest setting | ✓ | – | – | join policy + `room:join` |
+| Chat, screen share, audio/video | ✓ | ✓ | ✓ | `chat.send`, `screen.share` (+ must be admitted) |
+| Admit / deny from waiting room | ✓ | – | – | `lobby.admit`, `lobby.deny` |
+| Remove a participant | ✓ | – | – | `participant.remove` (can't remove a host or yourself) |
+| Lock, waiting room, allow guests | ✓ | – | – | `meeting.updateSettings` |
+| End for everyone | ✓ | – | – | `meeting.end` |
+
+**Admission is re-checked in the database on every `room:join`**, so an old token can't bypass a later decision:
+
+| Situation | Result |
+| --- | --- |
+| Denied by the host | `ADMISSION_DENIED`, forever, for that token |
+| Removed by the host | `REMOVED_FROM_MEETING` for that token; signed-in users are also banned from getting a new one (403) |
+| Meeting locked | No new tokens (`423`); a token issued before the lock that never entered gets `MEETING_LOCKED`. People already inside can reconnect; people the host admits personally can enter |
+| Guests disallowed | Guests get `401 SIGN_IN_REQUIRED`; guests already inside stay |
+| Waiting room turned off | Everyone waiting is admitted |
+| Room full | One seat is kept for the host while they're absent, so the owner can always get in |
+
+Removed **guests** can come back with a new identity (there is nothing to ban); lock the meeting or use the waiting room to prevent that.
+
+### Production note
+The session cookie is `SameSite=Lax`, so the browser must see the API as the **same site** as the app. Serve the API from the same domain (e.g. Vercel/Netlify rewrite `/api/*` and `/socket.io/*` to the backend) rather than calling a different domain directly; set `CLIENT_URL` to the app's origin.
 
 ## API
 
@@ -136,34 +188,48 @@ All errors share one shape (REST and Socket.IO acks):
 
 | Code | Status | When |
 | --- | --- | --- |
-| `VALIDATION_ERROR` / `INVALID_JSON` | 400 | Bad params/body |
-| `UNAUTHORIZED` / `TOKEN_EXPIRED` | 401 | Missing, invalid or expired participant token |
-| `FORBIDDEN` / `INVALID_HOST_KEY` | 403 | Wrong role, token for another meeting, wrong host key |
+| `VALIDATION_ERROR` / `INVALID_JSON` | 400 | Bad params/query/body |
+| `AUTH_REQUIRED` | 401 | Route needs a signed-in user |
+| `INVALID_CREDENTIALS` | 401 | Wrong email or password |
+| `SIGN_IN_REQUIRED` | 401 | Guest joining a meeting that doesn't allow guests |
+| `UNAUTHORIZED` / `TOKEN_EXPIRED` | 401 | Missing, invalid or expired token |
+| `FORBIDDEN` | 403 | Role lacks the permission, or token is for another meeting |
+| `REMOVED_FROM_MEETING` | 403 | Signed-in user the host removed |
 | `NOT_FOUND` | 404 | Unknown meeting or route |
-| `ROOM_FULL` | 409 | Meeting already has `maxParticipants` (4) people |
-| `MEETING_ENDED` | 410 | Meeting ended by the host, or its link expired |
+| `EMAIL_TAKEN` | 409 | Registering an email that exists |
+| `ROOM_FULL` | 409 | No seat left |
+| `MEETING_ENDED` | 410 | Ended by the host, or the link expired |
+| `MEETING_LOCKED` | 423 | Host locked the meeting |
 | `PAYLOAD_TOO_LARGE` / `RATE_LIMITED` / `INTERNAL_ERROR` | 413 / 429 / 500 | |
 
 ### REST
 
-| Method | Path | Auth | Body | Success |
+| Method | Path | Auth | Body / query | Success |
 | --- | --- | --- | --- | --- |
 | `GET` | `/api/health` | – | – | `200 { status, db }` (`503` if DB down) |
-| `POST` | `/api/meetings` | – | `{ title?: string ≤ 80 }` | `201 { meeting, joinUrl, hostKey }` |
-| `GET` | `/api/meetings/:code` | – | – | `200 { meeting }` (ended meetings: `status: "ended"`) |
-| `POST` | `/api/meetings/:code/join` | – | `{ displayName: 1–40 chars, hostKey? }` | `200 { participant, token, rtcConfig, meeting }` |
-| `GET` | `/api/meetings/:code/messages` | Bearer participant token | `?before=<iso>&limit=1–100` | `200 { messages }` oldest first · `410` after the meeting ends |
-| `POST` | `/api/meetings/:code/end` | Bearer host token | – | `204` (also deletes the meeting's chat) |
+| `POST` | `/api/auth/register` | – | `{ name ≤ 40, email, password 8–128 }` | `201 { user }` + session cookie |
+| `POST` | `/api/auth/login` | – | `{ email, password }` | `200 { user }` + session cookie |
+| `POST` | `/api/auth/logout` | – | – | `204`, cookie cleared |
+| `GET` | `/api/auth/me` | session | – | `200 { user }` |
+| `GET` | `/api/me/meetings` | session | `?limit=1–100` | `200 { meetings }`: hosted or attended, newest first, with `role` and `attendeeCount` |
+| `POST` | `/api/meetings` | session | `{ title? ≤ 80, settings?: { allowGuests?, waitingRoom? } }` | `201 { meeting, joinUrl }` |
+| `GET` | `/api/meetings/:code` | optional session | – | `200 { meeting }` (ended meetings: `status: "ended"`) |
+| `POST` | `/api/meetings/:code/join` | optional session | `{ displayName: 1–40 chars }` | `200 { participant, admission, token, rtcConfig, meeting }` |
+| `GET` | `/api/meetings/:code/messages` | participant token | `?before=<iso>&limit=1–100` | `200 { messages }` oldest first · `410` after the meeting ends |
+| `POST` | `/api/meetings/:code/end` | participant token with `meeting.end` | – | `204` (also deletes the meeting's chat) |
 
-`meeting` = `{ code, title, status, endedReason?, maxParticipants, participantCount, createdAt }`
-`participant` = `{ id, displayName, role: "host" | "guest" }`
+`user` = `{ id, name, email, createdAt }`
+`meeting` = `{ code, title, hostName, status, endedReason?, settings: { allowGuests, waitingRoom, locked }, maxParticipants, participantCount, viewerIsHost, createdAt, endedAt? }`
+`participant` = `{ id, displayName, role: "host" | "member" | "guest" }` · `admission` = `"admitted" | "waiting"`
 `rtcConfig` = `{ iceServers, iceTransportPolicy }`, passed straight to `new RTCPeerConnection()`
 
-### Socket.IO (connect with `auth: { token }`)
+### Socket.IO (connect with `auth: { token }` — the participant token)
+
+**Presence, media and signaling**
 
 | Direction | Event | Payload |
 | --- | --- | --- |
-| C→S (ack) | `room:join` | `{ media: { audio, video } }` → `{ ok: true, self, peers[] }` or `{ ok: false, error }` |
+| C→S (ack) | `room:join` | `{ media: { audio, video } }` → `{ ok, waiting: true, settings }` · `{ ok, self, peers[], presenterId, settings, lobby? }` (`lobby` for hosts) · or `MEETING_ENDED` / `ROOM_FULL` / `MEETING_LOCKED` / `ADMISSION_DENIED` / `REMOVED_FROM_MEETING` |
 | C→S (ack) | `room:leave` | → `{ ok: true }` |
 | C→S | `media:state` | `{ audio, video }` |
 | C→S | `signal` | `{ to, connectionId, type: "offer" \| "answer" \| "candidate", sdp?, candidate? }` |
@@ -171,15 +237,34 @@ All errors share one shape (REST and Socket.IO acks):
 | S→C | `peer:left` | `{ participantId }` |
 | S→C | `peer:media` | `{ participantId, audio, video }` |
 | S→C | `signal` | `{ from, connectionId, type, sdp?, candidate? }` |
-| C→S (ack) | `screen:start` | → `{ ok: true }` or `SCREEN_SHARE_BUSY` / `NOT_IN_MEETING` |
+| S→C | `meeting:ended` | `{ reason: "host_ended" \| "expired" }` (also sent to the waiting room) |
+| S→C | `session:replaced` | – (same participant connected from another tab) |
+
+**Screen share and chat** (must be admitted)
+
+| Direction | Event | Payload |
+| --- | --- | --- |
+| C→S (ack) | `screen:start` | → `{ ok: true }` or `SCREEN_SHARE_BUSY` / `NOT_IN_MEETING` / `FORBIDDEN` |
 | C→S | `screen:stop` | – |
 | S→C | `presenter:changed` | `{ participantId \| null }` |
 | C→S (ack) | `chat:send` | `{ text ≤ 1000, clientMsgId }` → `{ ok: true, message }` or `VALIDATION_ERROR` / `RATE_LIMITED` / `NOT_IN_MEETING` |
 | S→C | `chat:message` | `{ id, participantId, senderName, text, clientMsgId, createdAt }` |
 
-The `room:join` ack also includes `presenterId`, so late joiners immediately see who is presenting.
-| S→C | `meeting:ended` | `{ reason: "host_ended" \| "expired" }` |
-| S→C | `session:replaced` | – (same participant connected from another tab) |
+**Host controls** (ack; `NOT_IN_MEETING` unless admitted, `FORBIDDEN` unless the role has the permission)
+
+| Direction | Event | Payload / result |
+| --- | --- | --- |
+| C→S | `lobby:admit` | `{ participantId }` → `{ ok }` · `NOT_FOUND` if no longer waiting |
+| C→S | `lobby:deny` | `{ participantId }` → `{ ok }` |
+| C→S | `participant:remove` | `{ participantId }` → `{ ok }` · `BAD_REQUEST` (yourself) · `FORBIDDEN` (a host) · `NOT_FOUND` |
+| C→S | `meeting:update` | `{ locked?, waitingRoom?, allowGuests? }` (≥ 1 key) → `{ ok, settings }` |
+| S→C | `lobby:updated` | `{ waiting: [{ participantId, displayName, role, requestedAt }] }` (hosts only) |
+| S→C | `lobby:admitted` | – (to the admitted person; they re-emit `room:join`) |
+| S→C | `lobby:denied` | – (then disconnected) |
+| S→C | `participant:removed` | – (then disconnected; others get `peer:left`) |
+| S→C | `meeting:settings` | `{ allowGuests, waitingRoom, locked }` (everyone, including the waiting room) |
+
+Socket.IO rooms per meeting: `<code>` (admitted participants only), `<code>:hosts`, `<code>:lobby`. Waiting sockets are never in `<code>`, so they receive no media, chat or presence traffic.
 
 ## Signaling
 
@@ -266,16 +351,17 @@ Each participant uploads one copy of their video per other participant, so uploa
 
 ## Data model
 
-- **Meeting** — `code` (unique), `title`, `hostKeyHash` (never returned), `status` (`active`/`ended`), `endedReason`, `maxParticipants`, `lastActiveAt`, `endedAt`, `expiresAt` (TTL index).
-- **Participant** — one per join: `meetingId`, `displayName`, `role`, `joinedAt`, `leftAt`.
+- **User** — `email` (unique, lowercase), `name`, `passwordHash` (scrypt, never returned).
+- **Meeting** — `code` (unique), `title`, `hostUserId`, `hostName`, `settings { allowGuests, waitingRoom, locked }`, `bannedUserIds` (never returned), `status`, `endedReason`, `maxParticipants`, `lastActiveAt`, `endedAt`, `expiresAt` (TTL, 90 days after ending).
+- **Participant** — one per join request: `meetingId`, `userId?`, `displayName`, `role`, `status` (`waiting`/`admitted`/`denied`/`removed`), `admittedBy`, `enteredAt` (history + lock), `leftAt`.
 - **Message** — `meetingId`, `participantId`, `senderName` (denormalized), `text`, `clientMsgId` (unique per participant), `createdAt`, `expiresAt` (TTL backstop). Deleted when the meeting ends.
-- **Live presence** — in memory (`RoomManager`): `code → participantId → { displayName, role, socketId, media }`, plus `code → presenterId`.
+- **Live presence** — in memory (`RoomManager`): who is in each room, who is waiting, and who is presenting.
 
 ## Design notes
 
 - **Meeting codes** are 10 random letters from a CSPRNG (~47 bits), backed by a unique index; lookups and joins are rate-limited so guessing is impractical.
-- **Host key** is a 192-bit random secret; only its SHA-256 hash is stored, compared in constant time. A wrong key is a 403, not a silent downgrade to guest.
-- **Participant tokens** are JWTs (HS256 pinned, 2 h expiry) scoped to one meeting and one role. They authorize both REST calls and the Socket.IO handshake, and a token for meeting A is rejected on meeting B.
+- **Host = owner**: hosting is tied to the account that created the meeting, not to a secret link, so it works from any device and can't be leaked by forwarding a URL.
+- **Participant tokens** are JWTs (HS256 pinned, 2 h expiry) scoped to one meeting and one role. They authorize both REST calls and the Socket.IO handshake, and a token for meeting A is rejected on meeting B. Session and participant tokens use different audiences, so neither can stand in for the other.
 - **Capacity** is checked twice: at `/join` for fast feedback, and authoritatively on `room:join`. The socket check and the room insert run with no `await` between them, so two people can't take the last seat at once.
 - **Presence lives in memory**, durable records in MongoDB. Closing a tab is detected by the socket disconnect (immediately on a normal close, or after Socket.IO's ~45 s ping timeout if the network just vanishes); the others then close that peer connection. Reconnecting with the same token replaces the old socket without announcing a leave.
 - **Remote audio** plays through a separate `<audio>` element per person, so it keeps playing when their camera is off and the tile shows an avatar.
@@ -296,6 +382,17 @@ Each participant uploads one copy of their video per other participant, so uploa
 10. **Chat**: with the panel closed on one side, send from the other: the Chat button shows an unread badge. Try Shift+Enter for a new line, a 1000+ character message, and `<b>hi</b>` (shown literally). Reload one window: earlier messages are still there. End the meeting: the chat is gone.
 11. **Keyboard only**: Tab through the controls, open Chat with Enter, type and send, press Esc — focus returns to the Chat button.
 12. **Phone width** (DevTools device toolbar): controls become icon-only, the side panel becomes full-screen.
+
+## Testing accounts and host controls manually
+
+Use two browsers (or a normal + an Incognito window) so each has its own session cookie.
+
+1. **Sign up** in window A, create a meeting with **Waiting room** on and **Allow guests** off. Join.
+2. In window B (signed out) open the link: the lobby says **Sign in to join**. Sign up as a second user; you're sent back to the lobby. Click **Ask to join**: B sees "Waiting for the host…".
+3. A sees the banner "… is waiting to join": **Admit**. B enters and the call connects. Try **Deny** with another request: B gets "The host didn't let you in".
+4. In A's People panel: toggle **Lock meeting** (everyone sees "Locked"; a new join shows the locked message), then **Remove** B. B lands on "You were removed"; reopening the link as B's account is refused.
+5. Server-side enforcement: in B's DevTools console, call the join API directly while locked (`fetch('/api/meetings/<code>/join', {method:'POST', headers:{'Content-Type':'application/json'}, body:'{"displayName":"x"}'})`) → `423 MEETING_LOCKED` even though the button was disabled.
+6. **My meetings** (header) lists meetings you hosted or attended; signed out, `/meetings` redirects to sign-in.
 
 ## Troubleshooting
 
