@@ -13,7 +13,7 @@
     "dev": "concurrently -n server,client -c blue,magenta \"npm run dev -w server\" \"npm run dev -w client\"",
     "build": "npm run build -w client",
     "start": "npm run start -w server",
-    "test": "npm test -w server",
+    "test": "npm test --workspaces",
     "db:up": "docker compose up -d mongo",
     "db:down": "docker compose down"
   },

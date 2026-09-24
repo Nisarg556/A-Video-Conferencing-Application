@@ -1,18 +1,28 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { endMeeting } from '../../api/meetings.js';
 import { useMeetingRoom } from '../../hooks/useMeetingRoom.js';
 import { CopyLink } from '../CopyLink.jsx';
 import { LeaveIcon } from '../icons.jsx';
 import { MediaControls } from '../MediaControls.jsx';
+import { RemoteAudio } from '../RemoteAudio.jsx';
 import { StatusMessage } from '../StatusMessage.jsx';
 import { VideoTile } from '../VideoTile.jsx';
 
-/**
- * In-meeting view. Presence is live (who joined/left); remote video arrives
- * with WebRTC in the next milestone, so other people show as avatars for now.
- */
+/** In-meeting view: video grid, per-person connection status, controls. */
 export function MeetingRoom({ meeting, session, media, onExit }) {
-  const room = useMeetingRoom(session.token);
+  // What we tell others: "mic on" only if there is a live, enabled track.
+  const mediaState = useMemo(
+    () => ({ audio: media.micOn && Boolean(media.audioTrack), video: Boolean(media.videoTrack) }),
+    [media.micOn, media.audioTrack, media.videoTrack],
+  );
+
+  const room = useMeetingRoom({
+    token: session.token,
+    rtcConfig: session.rtcConfig,
+    audioTrack: media.audioTrack,
+    videoTrack: media.videoTrack,
+    mediaState,
+  });
   const [ending, setEnding] = useState(false);
   const [actionError, setActionError] = useState(null);
   const isHost = session.participant.role === 'host';
@@ -56,6 +66,7 @@ export function MeetingRoom({ meeting, session, media, onExit }) {
   }
 
   const count = room.peers.length + 1;
+  const deviceProblem = media.errors.video?.message ?? media.errors.audio?.message;
 
   return (
     <div className="room">
@@ -79,25 +90,39 @@ export function MeetingRoom({ meeting, session, media, onExit }) {
           hasVideo={Boolean(media.videoTrack)}
           name={session.participant.displayName}
           label={`${session.participant.displayName} (you)`}
-          micMuted={!media.micOn}
+          micMuted={!mediaState.audio}
           badge={isHost ? 'Host' : undefined}
           isLocal
         />
         {room.peers.map((peer) => (
           <VideoTile
             key={peer.participantId}
+            stream={peer.stream}
+            hasVideo={Boolean(peer.stream && peer.media?.video)}
             name={peer.displayName}
-            hasVideo={false}
+            micMuted={!peer.media?.audio}
             badge={peer.role === 'host' ? 'Host' : undefined}
+            connectionState={peer.connectionState}
           />
         ))}
       </section>
+
+      {room.peers.map((peer) => peer.stream && <RemoteAudio key={peer.participantId} stream={peer.stream} />)}
 
       {room.peers.length === 0 && room.status === 'joined' && (
         <div className="card invite-card">
           <p className="muted">You’re the only one here. Share the link to invite others.</p>
           <CopyLink url={`${window.location.origin}/m/${meeting.code}`} />
         </div>
+      )}
+
+      {deviceProblem && (
+        <p className="alert" role="status">
+          {deviceProblem}{' '}
+          <button type="button" className="link-button" onClick={media.retry}>
+            Try again
+          </button>
+        </p>
       )}
 
       {actionError && (

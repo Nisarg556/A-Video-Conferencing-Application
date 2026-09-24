@@ -6,21 +6,34 @@ import { Meeting } from '../modules/meetings/meeting.model.js';
 import { Participant } from '../modules/meetings/participant.model.js';
 import { touchMeeting } from '../modules/meetings/meeting.service.js';
 import { toPublicPeer } from './roomManager.js';
+import { joinPayloadSchema, mediaStateSchema, signalSchema } from './schemas.js';
+
+// A connection setup is 1 offer/answer + a few dozen ICE candidates per peer;
+// this leaves plenty of room for 3 peers + ICE restarts while stopping floods.
+const SIGNAL_LIMIT = { max: 300, windowMs: 10_000 };
 
 /**
- * Presence over Socket.IO. Events (client <-> server):
- *   C->S room:join  (ack)  -> { ok, self, peers } | { ok: false, error }
- *   C->S room:leave (ack)
- *   S->C peer:joined  { participantId, displayName, role, joinedAt }
- *   S->C peer:left    { participantId }
+ * Presence + WebRTC signaling over Socket.IO. Events (client <-> server):
+ *   C->S room:join   (ack) { media }  -> { ok, self, peers } | { ok: false, error }
+ *   C->S room:leave  (ack)
+ *   C->S media:state { audio, video }
+ *   C->S signal      { to, connectionId, type: offer|answer|candidate, sdp?, candidate? }
+ *   S->C peer:joined { participantId, displayName, role, joinedAt, media }
+ *   S->C peer:left   { participantId }
+ *   S->C peer:media  { participantId, audio, video }
+ *   S->C signal      { from, connectionId, type, sdp?, candidate? }
  *   S->C meeting:ended { reason }
  *   S->C session:replaced   (same participant connected from another tab)
  * Errors use the same { code, message } shape as the REST API.
+ *
+ * The server never looks inside SDP; it only decides who may talk to whom.
  */
 export function attachSocketServer(httpServer, { rooms }) {
   const io = new Server(httpServer, {
     cors: { origin: env.CLIENT_URL },
     serveClient: false,
+    // Largest legitimate message is an SDP (< 64 KB); reject anything bigger.
+    maxHttpBufferSize: 100_000,
   });
 
   // Handshake auth: no valid participant token, no connection.
@@ -37,12 +50,16 @@ export function attachSocketServer(httpServer, { rooms }) {
 
   io.on('connection', (socket) => {
     const me = socket.data.participant;
+    const allowSignal = createRateLimiter(SIGNAL_LIMIT);
     let joined = false;
 
     socket.on('room:join', async (...args) => {
       const reply = ackFrom(args);
       try {
         if (joined) return reply({ ok: true, ...snapshot() });
+
+        const payload = joinPayloadSchema.safeParse(args[0]);
+        if (!payload.success) return reply(fail('VALIDATION_ERROR', 'Invalid room:join payload'));
 
         // Re-check the database: the meeting may have ended after the token was issued.
         const meeting = await Meeting.findById(me.meetingId);
@@ -63,6 +80,7 @@ export function attachSocketServer(httpServer, { rooms }) {
           role: me.role,
           socketId: socket.id,
           joinedAt: new Date().toISOString(),
+          media: payload.data.media,
         };
         rooms.add(me.code, peer);
         socket.join(me.code);
@@ -78,6 +96,8 @@ export function attachSocketServer(httpServer, { rooms }) {
         }
 
         reply({ ok: true, ...snapshot() });
+        // Others close any old connection to this participant and wait for
+        // the newcomer's offer (the newcomer always initiates).
         socket.to(me.code).emit('peer:joined', toPublicPeer(peer));
 
         persist(Participant.updateOne({ _id: me.participantId }, { leftAt: null }));
@@ -88,12 +108,39 @@ export function attachSocketServer(httpServer, { rooms }) {
       }
     });
 
+    socket.on('media:state', (payload) => {
+      if (!joined) return;
+      const parsed = mediaStateSchema.safeParse(payload);
+      const peer = rooms.get(me.code, me.participantId);
+      if (!parsed.success || peer?.socketId !== socket.id) return;
+
+      peer.media = parsed.data;
+      socket.to(me.code).emit('peer:media', { participantId: me.participantId, ...parsed.data });
+    });
+
+    // Relay offers/answers/ICE candidates to exactly one other participant.
+    socket.on('signal', (payload) => {
+      if (!joined || !allowSignal()) return;
+      const parsed = signalSchema.safeParse(payload);
+      if (!parsed.success) return;
+
+      const { to, ...message } = parsed.data;
+      if (to === me.participantId) return;
+      // Target must be in *this* meeting: a signal can never cross rooms.
+      const target = rooms.get(me.code, to);
+      if (!target) return;
+
+      // "from" comes from the verified token, never from the client payload.
+      io.to(target.socketId).emit('signal', { from: me.participantId, ...message });
+    });
+
     socket.on('room:leave', (...args) => {
       leave();
       ackFrom(args)({ ok: true });
       socket.disconnect(true);
     });
 
+    // Tab closed, network lost (after Socket.IO's ping timeout), or kicked.
     socket.on('disconnect', leave);
 
     function snapshot() {
@@ -144,8 +191,22 @@ function fail(code, message) {
   return { ok: false, error: { code, message } };
 }
 
+// Fixed-window counter: true while under `max` events in the current window.
+function createRateLimiter({ max, windowMs }) {
+  let windowStart = Date.now();
+  let count = 0;
+  return () => {
+    const now = Date.now();
+    if (now - windowStart >= windowMs) {
+      windowStart = now;
+      count = 0;
+    }
+    count += 1;
+    return count <= max;
+  };
+}
+
 // Presence must not block on the database; log persistence failures instead.
 function persist(promise) {
   promise.catch((err) => console.error('presence persistence failed', err));
 }
-

@@ -7,7 +7,7 @@ import {
   joinMeetingLimiter,
   lookupMeetingLimiter,
 } from '../../middleware/rateLimit.js';
-import { getIceServers } from '../../realtime/iceServers.js';
+import { getRtcConfig } from '../../realtime/iceServers.js';
 import { createMeetingSchema, joinMeetingSchema, meetingCodeParamsSchema } from './meeting.schemas.js';
 import * as meetingService from './meeting.service.js';
 
@@ -38,7 +38,7 @@ export function createMeetingRouter({ rooms }) {
     res.json({ meeting: publicMeeting(meeting) });
   });
 
-  // POST /api/meetings/:code/join -> 200 { participant, token, iceServers, meeting }
+  // POST /api/meetings/:code/join -> 200 { participant, token, rtcConfig, meeting }
   //   | 403 INVALID_HOST_KEY | 404 | 409 ROOM_FULL | 410 MEETING_ENDED
   router.post('/:code/join', joinMeetingLimiter, validate(joinMeetingSchema), async (req, res) => {
     const { meeting, participant, token } = await meetingService.joinMeeting(
@@ -49,7 +49,7 @@ export function createMeetingRouter({ rooms }) {
     res.json({
       participant: participant.toPublic(),
       token,
-      iceServers: getIceServers(),
+      rtcConfig: getRtcConfig(participant.id),
       meeting: publicMeeting(meeting),
     });
   });

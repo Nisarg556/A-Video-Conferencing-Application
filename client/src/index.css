@@ -505,3 +505,28 @@ select.input {
   background: var(--surface);
   box-shadow: 0 4px 16px rgb(16 24 40 / 0.12);
 }
+
+.tile-status {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  padding: 3px 10px;
+  border-radius: 6px;
+  background: rgb(0 0 0 / 0.55);
+  font-size: 0.75rem;
+}
+.tile-status-error {
+  background: var(--danger);
+  color: #fff;
+}
+
+.link-button {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  font-weight: 600;
+  text-decoration: underline;
+  cursor: pointer;
+}

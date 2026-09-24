@@ -43,7 +43,10 @@ describe('POST /api/meetings/:code/join', () => {
 
     expect(res.status).toBe(200);
     expect(res.body.participant).toMatchObject({ displayName: 'Ada', role: 'guest' });
-    expect(res.body.iceServers).toEqual(expect.arrayContaining([expect.objectContaining({ urls: expect.any(Array) })]));
+    expect(res.body.rtcConfig).toEqual({
+      iceServers: [{ urls: expect.arrayContaining([expect.stringMatching(/^stun:/)]) }],
+      iceTransportPolicy: 'all',
+    });
     expect(res.body.meeting.code).toBe(meeting.code);
 
     const claims = verifyParticipantToken(res.body.token);

@@ -5,7 +5,7 @@
  * clients reconnect, so it lives in memory rather than MongoDB. With more than
  * one server instance it would move to Redis.
  *
- * peer = { participantId, displayName, role, socketId, joinedAt }
+ * peer = { participantId, displayName, role, socketId, joinedAt, media: { audio, video } }
  */
 export class RoomManager {
   #rooms = new Map(); // code -> Map<participantId, peer>
@@ -47,6 +47,6 @@ export class RoomManager {
   }
 }
 
-export function toPublicPeer({ participantId, displayName, role, joinedAt }) {
-  return { participantId, displayName, role, joinedAt };
+export function toPublicPeer({ participantId, displayName, role, joinedAt, media }) {
+  return { participantId, displayName, role, joinedAt, media };
 }
