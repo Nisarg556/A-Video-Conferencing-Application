@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router';
 import { createMeeting } from '../api/meetings.js';
-import { saveHostKey } from '../lib/hostKeys.js';
+import { saveHostKey } from '../lib/storage.js';
 import { MEETING_TITLE_MAX, parseMeetingInput } from '../lib/meetingCode.js';
 
 export function HomePage() {

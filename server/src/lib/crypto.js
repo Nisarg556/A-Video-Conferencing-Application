@@ -1,4 +1,4 @@
-import { createHash, randomBytes, randomInt } from 'node:crypto';
+import { createHash, randomBytes, randomInt, timingSafeEqual } from 'node:crypto';
 
 // Meeting codes look like "kqz-mtrw-xpa": 10 random letters = 26^10 ≈ 47 bits,
 // generated with a CSPRNG so codes can't be predicted or enumerated cheaply.
@@ -23,4 +23,12 @@ export function generateSecret(bytes = 24) {
 // deliberate slowness buys nothing.
 export function sha256(value) {
   return createHash('sha256').update(value).digest('hex');
+}
+
+// Constant-time comparison so response timing can't reveal how many leading
+// characters of a secret were correct.
+export function safeEqual(a, b) {
+  const bufA = Buffer.from(String(a));
+  const bufB = Buffer.from(String(b));
+  return bufA.length === bufB.length && timingSafeEqual(bufA, bufB);
 }

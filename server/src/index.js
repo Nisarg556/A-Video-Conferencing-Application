@@ -1,6 +1,9 @@
+import http from 'node:http';
 import { env } from './config/env.js';
 import { connectDb, disconnectDb } from './db/connect.js';
 import { createApp } from './app.js';
+import { RoomManager } from './realtime/roomManager.js';
+import { attachSocketServer } from './realtime/socketServer.js';
 
 async function main() {
   try {
@@ -12,18 +15,21 @@ async function main() {
     process.exit(1);
   }
 
-  const app = createApp();
-  const server = app.listen(env.PORT, () => {
+  // REST and Socket.IO share one HTTP server and one view of live presence.
+  const rooms = new RoomManager();
+  const server = http.createServer(createApp({ rooms }));
+  const realtime = attachSocketServer(server, { rooms });
+
+  server.listen(env.PORT, () => {
     console.log(`API listening on http://localhost:${env.PORT} (${env.NODE_ENV})`);
   });
 
-  // Graceful shutdown: stop accepting connections, then close the DB.
-  const shutdown = (signal) => {
+  // Graceful shutdown: close sockets and the HTTP server, then the DB.
+  const shutdown = async (signal) => {
     console.log(`${signal} received, shutting down`);
-    server.close(async () => {
-      await disconnectDb();
-      process.exit(0);
-    });
+    await realtime.close();
+    await disconnectDb();
+    process.exit(0);
   };
   process.on('SIGINT', shutdown);
   process.on('SIGTERM', shutdown);

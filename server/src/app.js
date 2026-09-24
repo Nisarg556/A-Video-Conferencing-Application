@@ -5,10 +5,12 @@ import { env } from './config/env.js';
 import { isDbConnected } from './db/connect.js';
 import { apiLimiter } from './middleware/rateLimit.js';
 import { errorHandler, notFoundHandler } from './middleware/errorHandler.js';
-import { meetingRouter } from './modules/meetings/meeting.routes.js';
+import { createMeetingRouter } from './modules/meetings/meeting.routes.js';
+import { RoomManager } from './realtime/roomManager.js';
 
 // Builds the Express app without listening, so tests can drive it with supertest.
-export function createApp() {
+// `rooms` is shared with the Socket.IO server so REST can see live presence.
+export function createApp({ rooms = new RoomManager() } = {}) {
   const app = express();
 
   // Behind Render/Railway/Fly's proxy, trust the first hop so req.ip
@@ -25,7 +27,7 @@ export function createApp() {
   });
 
   app.use('/api', apiLimiter);
-  app.use('/api/meetings', meetingRouter);
+  app.use('/api/meetings', createMeetingRouter({ rooms }));
 
   app.use(notFoundHandler);
   app.use(errorHandler);

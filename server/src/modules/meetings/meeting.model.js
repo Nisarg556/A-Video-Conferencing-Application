@@ -2,6 +2,11 @@ import mongoose from 'mongoose';
 
 export const MEETING_TITLE_MAX = 80;
 export const DEFAULT_MAX_PARTICIPANTS = 4;
+// An empty meeting nobody has touched for this long is treated as expired.
+export const MEETING_IDLE_TTL_MS = 24 * 60 * 60 * 1000;
+// Ended meetings are kept this long (for "this meeting has ended" pages), then
+// deleted by MongoDB's TTL monitor.
+export const ENDED_MEETING_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
 
 const meetingSchema = new mongoose.Schema(
   {
@@ -10,7 +15,9 @@ const meetingSchema = new mongoose.Schema(
     // Only the hash is stored; select: false keeps it out of queries by default.
     hostKeyHash: { type: String, required: true, select: false },
     status: { type: String, enum: ['active', 'ended'], default: 'active' },
+    endedReason: { type: String, enum: ['host_ended', 'expired'] },
     maxParticipants: { type: Number, default: DEFAULT_MAX_PARTICIPANTS },
+    // Bumped whenever someone joins or leaves; drives idle expiry.
     lastActiveAt: { type: Date, default: Date.now },
     endedAt: { type: Date },
     // Set when a meeting ends; the TTL index lets Mongo delete it automatically.
@@ -25,6 +32,7 @@ meetingSchema.methods.toPublic = function toPublic() {
     code: this.code,
     title: this.title,
     status: this.status,
+    ...(this.endedReason && { endedReason: this.endedReason }),
     maxParticipants: this.maxParticipants,
     createdAt: this.createdAt,
   };

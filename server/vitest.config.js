@@ -9,6 +9,7 @@ export default defineConfig({
       NODE_ENV: 'test',
       MONGODB_URI: 'mongodb://placeholder/test',
       CLIENT_URL: 'http://localhost:5173',
+      JWT_SECRET: 'test-secret-that-is-at-least-32-characters-long',
     },
     // First run downloads a MongoDB binary for mongodb-memory-server.
     hookTimeout: 120_000,

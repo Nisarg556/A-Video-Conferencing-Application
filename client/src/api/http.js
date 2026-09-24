@@ -1,4 +1,4 @@
-const BASE_URL = (import.meta.env.VITE_API_URL ?? '').replace(/\/$/, '');
+export const API_BASE_URL = (import.meta.env.VITE_API_URL ?? '').replace(/\/$/, '');
 
 // Mirrors the server's error shape: { error: { code, message, details? } }.
 // status 0 means the request never got a response (server down, offline).
@@ -12,12 +12,16 @@ export class ApiError extends Error {
   }
 }
 
-export async function apiRequest(path, { method = 'GET', body, signal } = {}) {
+export async function apiRequest(path, { method = 'GET', body, token, signal } = {}) {
+  const headers = {};
+  if (body !== undefined) headers['Content-Type'] = 'application/json';
+  if (token) headers.Authorization = `Bearer ${token}`;
+
   let res;
   try {
-    res = await fetch(`${BASE_URL}/api${path}`, {
+    res = await fetch(`${API_BASE_URL}/api${path}`, {
       method,
-      headers: body === undefined ? undefined : { 'Content-Type': 'application/json' },
+      headers,
       body: body === undefined ? undefined : JSON.stringify(body),
       signal,
     });

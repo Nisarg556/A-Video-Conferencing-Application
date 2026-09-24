@@ -1,14 +1,20 @@
-import { useState } from 'react';
-import { useParams } from 'react-router';
+import { useCallback, useState } from 'react';
+import { Navigate, useNavigate, useParams } from 'react-router';
+import { MeetingRoom } from '../components/meeting/MeetingRoom.jsx';
+import { PreJoin } from '../components/meeting/PreJoin.jsx';
 import { StatusMessage } from '../components/StatusMessage.jsx';
+import { useLocalMedia } from '../hooks/useLocalMedia.js';
 import { useMeeting } from '../hooks/useMeeting.js';
-import { getHostKey } from '../lib/hostKeys.js';
-import { isValidMeetingCode } from '../lib/meetingCode.js';
+import { isValidMeetingCode, parseMeetingInput } from '../lib/meetingCode.js';
 
 export function MeetingPage() {
   const { code } = useParams();
 
   if (!isValidMeetingCode(code)) {
+    // "/m/FKF-BQXX-GZM" or "/m/fkfbqxxgzm" (typed from a screen share) → canonical URL.
+    const normalized = parseMeetingInput(code);
+    if (normalized) return <Navigate to={`/m/${normalized}`} replace />;
+
     return (
       <StatusMessage title="Invalid meeting link">
         “{code}” isn’t a valid meeting code. Check the link and try again.
@@ -16,11 +22,34 @@ export function MeetingPage() {
     );
   }
 
-  return <MeetingLobby code={code} />;
+  // key: a different code must start from a clean slate (media, session).
+  return <MeetingFlow key={code} code={code} />;
 }
 
-function MeetingLobby({ code }) {
+/**
+ * lobby (PreJoin) -> room (MeetingRoom) -> /m/:code/left
+ *
+ * Local media lives at this level so the camera permission granted in the
+ * lobby carries into the room, and everything is released when we navigate away.
+ */
+function MeetingFlow({ code }) {
+  const navigate = useNavigate();
   const { status, meeting, error } = useMeeting(code);
+  const [session, setSession] = useState(null);
+  const [endedMessage, setEndedMessage] = useState(null);
+
+  const isActive = status === 'success' && meeting.status === 'active' && !endedMessage;
+  // Don't ask for the camera until we know the meeting is joinable.
+  const media = useLocalMedia({ enabled: isActive });
+  const { stopAll } = media;
+
+  const exit = useCallback(
+    (reason) => {
+      stopAll();
+      navigate(`/m/${code}/left`, { replace: true, state: { reason } });
+    },
+    [code, stopAll, navigate],
+  );
 
   if (status === 'loading') {
     return (
@@ -34,68 +63,27 @@ function MeetingLobby({ code }) {
     if (error.code === 'NOT_FOUND') {
       return (
         <StatusMessage title="Meeting not found">
-          This meeting doesn’t exist. Double-check the code or ask the host for a new link.
+          This link doesn’t match any meeting. It may have been mistyped, or it expired and was cleaned up.
         </StatusMessage>
       );
     }
     return <StatusMessage title="Something went wrong">{error.message}</StatusMessage>;
   }
 
-  if (meeting.status === 'ended') {
-    return <StatusMessage title="This meeting has ended">Ask the host to start a new one.</StatusMessage>;
+  if (meeting.status === 'ended' || endedMessage) {
+    const expired = meeting.endedReason === 'expired' || /expired/i.test(endedMessage ?? '');
+    return (
+      <StatusMessage title={expired ? 'This meeting link has expired' : 'This meeting has ended'}>
+        {expired
+          ? 'Links stop working after a meeting sits empty for 24 hours. Start a new meeting instead.'
+          : 'The host ended this meeting. Start a new one to meet again.'}
+      </StatusMessage>
+    );
   }
 
-  const isHost = Boolean(getHostKey(code));
-  const inviteUrl = `${window.location.origin}/m/${meeting.code}`;
-
-  return (
-    <div className="lobby">
-      {/* Camera/mic preview arrives in the next milestone. */}
-      <section className="card preview-placeholder" aria-label="Camera preview">
-        <p className="muted">Camera preview coming soon</p>
-      </section>
-
-      <section className="card stack">
-        <div className="lobby-heading">
-          <h1>{meeting.title || 'Untitled meeting'}</h1>
-          {isHost && <span className="badge">Host</span>}
-        </div>
-        <p className="muted">
-          Code <code>{meeting.code}</code> · up to {meeting.maxParticipants} people
-        </p>
-
-        <CopyLink url={inviteUrl} />
-
-        <button type="button" className="btn btn-primary" disabled title="Available in the next milestone">
-          Join meeting
-        </button>
-      </section>
-    </div>
-  );
-}
-
-function CopyLink({ url }) {
-  const [copied, setCopied] = useState(false);
-
-  async function copy() {
-    try {
-      await navigator.clipboard.writeText(url);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    } catch {
-      // Clipboard can be blocked; the link is still visible to select manually.
-    }
+  if (session) {
+    return <MeetingRoom meeting={meeting} session={session} media={media} onExit={exit} />;
   }
 
-  return (
-    <div className="field">
-      <label htmlFor="invite">Invite link</label>
-      <div className="copy-row">
-        <input id="invite" className="input" value={url} readOnly onFocus={(e) => e.target.select()} />
-        <button type="button" className="btn btn-secondary" onClick={copy}>
-          {copied ? 'Copied' : 'Copy'}
-        </button>
-      </div>
-    </div>
-  );
+  return <PreJoin meeting={meeting} media={media} onJoined={setSession} onMeetingEnded={setEndedMessage} />;
 }

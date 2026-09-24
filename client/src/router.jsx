@@ -3,6 +3,7 @@ import { Layout } from './components/Layout.jsx';
 import { RouteErrorPage } from './pages/RouteErrorPage.jsx';
 import { HomePage } from './pages/HomePage.jsx';
 import { MeetingPage } from './pages/MeetingPage.jsx';
+import { LeftPage } from './pages/LeftPage.jsx';
 import { NotFoundPage } from './pages/NotFoundPage.jsx';
 
 export const router = createBrowserRouter([
@@ -13,6 +14,7 @@ export const router = createBrowserRouter([
     children: [
       { path: '/', element: <HomePage /> },
       { path: '/m/:code', element: <MeetingPage /> },
+      { path: '/m/:code/left', element: <LeftPage /> },
       { path: '*', element: <NotFoundPage /> },
     ],
   },

@@ -2,6 +2,7 @@
 // this only gives instant feedback before a request is made.
 export const MEETING_CODE_REGEX = /^[a-z]{3}-[a-z]{4}-[a-z]{3}$/;
 export const MEETING_TITLE_MAX = 80;
+export const DISPLAY_NAME_MAX = 40;
 
 export function isValidMeetingCode(code) {
   return MEETING_CODE_REGEX.test(code);
