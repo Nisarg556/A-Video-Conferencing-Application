@@ -1,0 +1,12 @@
+# Local MongoDB for development. Start with `npm run db:up`.
+services:
+  mongo:
+    image: mongo:7
+    container_name: confer-mongo
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo-data:/data/db
+
+volumes:
+  mongo-data:
