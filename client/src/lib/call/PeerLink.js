@@ -86,6 +86,15 @@ export class PeerLink {
     sender.replaceTrack(track).catch((err) => console.warn(`replaceTrack(${kind}) failed`, err));
   }
 
+  /**
+   * Their current speaking level (0..1) as measured by the browser's RTP
+   * receiver. Cheap to poll and needs no extra AudioContext per person.
+   */
+  getAudioLevel() {
+    const receiver = this.#pc.getReceivers?.().find((r) => r.track?.kind === 'audio');
+    return receiver?.getSynchronizationSources?.()[0]?.audioLevel ?? 0;
+  }
+
   close() {
     if (this.#closed) return;
     this.#closed = true;

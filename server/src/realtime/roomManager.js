@@ -1,5 +1,6 @@
 /**
- * In-memory registry of who is connected to which meeting right now.
+ * In-memory registry of who is connected to which meeting right now, and who
+ * is presenting.
  *
  * This is ephemeral state: it changes every few seconds and is rebuilt as
  * clients reconnect, so it lives in memory rather than MongoDB. With more than
@@ -9,6 +10,7 @@
  */
 export class RoomManager {
   #rooms = new Map(); // code -> Map<participantId, peer>
+  #presenters = new Map(); // code -> participantId currently sharing their screen
 
   count(code) {
     return this.#rooms.get(code)?.size ?? 0;
@@ -38,12 +40,22 @@ export class RoomManager {
     if (!peer || peer.socketId !== socketId) return null;
 
     room.delete(participantId);
-    if (room.size === 0) this.#rooms.delete(code);
+    if (room.size === 0) this.deleteRoom(code);
     return peer;
   }
 
   deleteRoom(code) {
     this.#rooms.delete(code);
+    this.#presenters.delete(code);
+  }
+
+  getPresenter(code) {
+    return this.#presenters.get(code) ?? null;
+  }
+
+  setPresenter(code, participantId) {
+    if (participantId) this.#presenters.set(code, participantId);
+    else this.#presenters.delete(code);
   }
 }
 

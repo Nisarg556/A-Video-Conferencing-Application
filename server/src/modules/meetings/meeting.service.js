@@ -4,6 +4,7 @@ import { meetingEvents } from '../../lib/events.js';
 import { signParticipantToken } from '../../lib/tokens.js';
 import { ENDED_MEETING_RETENTION_MS, MEETING_IDLE_TTL_MS, Meeting } from './meeting.model.js';
 import { Participant } from './participant.model.js';
+import { deleteMessagesForMeeting } from '../chat/chat.service.js';
 
 const DUPLICATE_KEY = 11000;
 const MAX_CODE_ATTEMPTS = 5;
@@ -53,6 +54,8 @@ export async function endMeeting(meeting, reason) {
   meeting.endedAt = now;
   meeting.expiresAt = new Date(now.getTime() + ENDED_MEETING_RETENTION_MS);
   await meeting.save();
+  // Chat policy: messages live only as long as the meeting.
+  await deleteMessagesForMeeting(meeting._id);
   meetingEvents.emit('ended', { code: meeting.code, reason });
   return meeting;
 }

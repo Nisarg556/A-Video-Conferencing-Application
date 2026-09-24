@@ -80,6 +80,13 @@ export class CallManager {
     for (const link of this.#links.values()) link.replaceTrack(kind, track);
   }
 
+  /** participantId -> speaking level (0..1), for active-speaker detection. */
+  getAudioLevels() {
+    const levels = new Map();
+    for (const [participantId, link] of this.#links) levels.set(participantId, link.getAudioLevel());
+    return levels;
+  }
+
   getPeer(participantId) {
     const link = this.#links.get(participantId);
     return link ? { stream: link.remoteStream, connectionState: link.connectionState } : null;

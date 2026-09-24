@@ -16,6 +16,12 @@ export function joinMeeting(code, { displayName, hostKey }) {
   });
 }
 
+// -> { messages } oldest first; 410 once the meeting has ended (messages are deleted)
+export function getMessages(code, token, { before, signal } = {}) {
+  const query = before ? `?before=${encodeURIComponent(before)}` : '';
+  return apiRequest(`/meetings/${encodeURIComponent(code)}/messages${query}`, { token, signal });
+}
+
 export function endMeeting(code, token) {
   return apiRequest(`/meetings/${encodeURIComponent(code)}/end`, { method: 'POST', token });
 }

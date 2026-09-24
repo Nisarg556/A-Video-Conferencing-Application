@@ -49,3 +49,42 @@ export const LeaveIcon = (p) => (
     <path d="M10 17l-5-5 5-5M5 12h11M15 4h3a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-3" />
   </Icon>
 );
+
+export const ScreenShareIcon = (p) => (
+  <Icon {...p}>
+    <rect x="2" y="4" width="20" height="13" rx="2" />
+    <path d="M8 21h8M12 17v4M12 13V8M9.5 10.5 12 8l2.5 2.5" />
+  </Icon>
+);
+
+export const StopShareIcon = (p) => (
+  <Icon {...p}>
+    <rect x="2" y="4" width="20" height="13" rx="2" />
+    <path d="M8 21h8M12 17v4M9.5 8.5l5 5M14.5 8.5l-5 5" />
+  </Icon>
+);
+
+export const ChatIcon = (p) => (
+  <Icon {...p}>
+    <path d="M21 12a8 8 0 0 1-11.6 7.1L4 20l1-4.6A8 8 0 1 1 21 12z" />
+  </Icon>
+);
+
+export const PeopleIcon = (p) => (
+  <Icon {...p}>
+    <circle cx="9" cy="8" r="3.5" />
+    <path d="M2.5 20a6.5 6.5 0 0 1 13 0M16 4.5a3.5 3.5 0 0 1 0 7M18.5 20a6.5 6.5 0 0 0-3-5.5" />
+  </Icon>
+);
+
+export const CloseIcon = (p) => (
+  <Icon {...p}>
+    <path d="M6 6l12 12M18 6 6 18" />
+  </Icon>
+);
+
+export const SendIcon = (p) => (
+  <Icon {...p}>
+    <path d="M22 2 11 13M22 2l-7 20-4-9-9-4z" />
+  </Icon>
+);

@@ -1,4 +1,5 @@
 import { useEffect, useRef } from 'react';
+import { createAudioLevelMeter } from '../lib/audioLevel.js';
 
 /**
  * Live input level for an audio track. Updates the DOM directly each animation
@@ -14,33 +15,17 @@ export function MicLevel({ track, active }) {
       return;
     }
 
-    const ctx = new AudioContext();
-    const source = ctx.createMediaStreamSource(new MediaStream([track]));
-    const analyser = ctx.createAnalyser();
-    analyser.fftSize = 512;
-    source.connect(analyser); // not connected to speakers: no echo
-    const samples = new Uint8Array(analyser.fftSize);
-
-    // Browsers may start an AudioContext suspended until the user interacts.
-    const resume = () => ctx.resume().catch(() => {});
-    if (ctx.state === 'suspended') window.addEventListener('pointerdown', resume, { once: true });
-
+    const meter = createAudioLevelMeter(track);
     let frame;
     const tick = () => {
-      analyser.getByteTimeDomainData(samples);
-      let sum = 0;
-      for (const s of samples) sum += ((s - 128) / 128) ** 2;
-      const rms = Math.sqrt(sum / samples.length);
-      bar.style.transform = `scaleX(${Math.min(1, rms * 4).toFixed(3)})`;
+      bar.style.transform = `scaleX(${Math.min(1, meter.getLevel() * 4).toFixed(3)})`;
       frame = requestAnimationFrame(tick);
     };
     tick();
 
     return () => {
       cancelAnimationFrame(frame);
-      window.removeEventListener('pointerdown', resume);
-      source.disconnect();
-      ctx.close().catch(() => {});
+      meter.close();
     };
   }, [track, active]);
 

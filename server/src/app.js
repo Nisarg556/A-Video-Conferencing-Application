@@ -5,6 +5,7 @@ import { env } from './config/env.js';
 import { isDbConnected } from './db/connect.js';
 import { apiLimiter } from './middleware/rateLimit.js';
 import { errorHandler, notFoundHandler } from './middleware/errorHandler.js';
+import { createChatRouter } from './modules/chat/chat.routes.js';
 import { createMeetingRouter } from './modules/meetings/meeting.routes.js';
 import { RoomManager } from './realtime/roomManager.js';
 
@@ -27,6 +28,7 @@ export function createApp({ rooms = new RoomManager() } = {}) {
   });
 
   app.use('/api', apiLimiter);
+  app.use('/api/meetings/:code/messages', createChatRouter({ rooms }));
   app.use('/api/meetings', createMeetingRouter({ rooms }));
 
   app.use(notFoundHandler);

@@ -5,8 +5,11 @@ import { verifyParticipantToken } from '../lib/tokens.js';
 import { Meeting } from '../modules/meetings/meeting.model.js';
 import { Participant } from '../modules/meetings/participant.model.js';
 import { touchMeeting } from '../modules/meetings/meeting.service.js';
+import { registerChatHandlers } from './chatHandlers.js';
 import { toPublicPeer } from './roomManager.js';
 import { joinPayloadSchema, mediaStateSchema, signalSchema } from './schemas.js';
+import { registerScreenShareHandlers } from './screenShareHandlers.js';
+import { ackFrom, createRateLimiter, fail, persist } from './socketUtils.js';
 
 // A connection setup is 1 offer/answer + a few dozen ICE candidates per peer;
 // this leaves plenty of room for 3 peers + ICE restarts while stopping floods.
@@ -14,7 +17,7 @@ const SIGNAL_LIMIT = { max: 300, windowMs: 10_000 };
 
 /**
  * Presence + WebRTC signaling over Socket.IO. Events (client <-> server):
- *   C->S room:join   (ack) { media }  -> { ok, self, peers } | { ok: false, error }
+ *   C->S room:join   (ack) { media }  -> { ok, self, peers, presenterId } | { ok: false, error }
  *   C->S room:leave  (ack)
  *   C->S media:state { audio, video }
  *   C->S signal      { to, connectionId, type: offer|answer|candidate, sdp?, candidate? }
@@ -24,6 +27,7 @@ const SIGNAL_LIMIT = { max: 300, windowMs: 10_000 };
  *   S->C signal      { from, connectionId, type, sdp?, candidate? }
  *   S->C meeting:ended { reason }
  *   S->C session:replaced   (same participant connected from another tab)
+ * Chat: see chatHandlers.js. Screen share: see screenShareHandlers.js.
  * Errors use the same { code, message } shape as the REST API.
  *
  * The server never looks inside SDP; it only decides who may talk to whom.
@@ -52,6 +56,10 @@ export function attachSocketServer(httpServer, { rooms }) {
     const me = socket.data.participant;
     const allowSignal = createRateLimiter(SIGNAL_LIMIT);
     let joined = false;
+    const isJoined = () => joined;
+
+    registerChatHandlers({ socket, me, isJoined });
+    registerScreenShareHandlers({ socket, me, rooms, isJoined });
 
     socket.on('room:join', async (...args) => {
       const reply = ackFrom(args);
@@ -148,6 +156,7 @@ export function attachSocketServer(httpServer, { rooms }) {
       return {
         self: toPublicPeer(rooms.get(me.code, me.participantId)),
         peers: peers.map(toPublicPeer),
+        presenterId: rooms.getPresenter(me.code),
       };
     }
 
@@ -155,9 +164,15 @@ export function attachSocketServer(httpServer, { rooms }) {
       if (!joined) return;
       joined = false;
       socket.leave(me.code);
+      const wasPresenting = rooms.getPresenter(me.code) === me.participantId;
       // No-op if a newer socket for this participant already replaced us.
       if (!rooms.remove(me.code, me.participantId, socket.id)) return;
 
+      if (wasPresenting) {
+        // Presenter closed the tab mid-share: free the slot for everyone.
+        rooms.setPresenter(me.code, null);
+        socket.to(me.code).emit('presenter:changed', { participantId: null });
+      }
       socket.to(me.code).emit('peer:left', { participantId: me.participantId });
       persist(Participant.updateOne({ _id: me.participantId }, { leftAt: new Date() }));
       persist(touchMeeting(me.meetingId));
@@ -180,33 +195,4 @@ export function attachSocketServer(httpServer, { rooms }) {
         io.close(() => resolve());
       }),
   };
-}
-
-function ackFrom(args) {
-  const last = args[args.length - 1];
-  return typeof last === 'function' ? last : () => {};
-}
-
-function fail(code, message) {
-  return { ok: false, error: { code, message } };
-}
-
-// Fixed-window counter: true while under `max` events in the current window.
-function createRateLimiter({ max, windowMs }) {
-  let windowStart = Date.now();
-  let count = 0;
-  return () => {
-    const now = Date.now();
-    if (now - windowStart >= windowMs) {
-      windowStart = now;
-      count = 0;
-    }
-    count += 1;
-    return count <= max;
-  };
-}
-
-// Presence must not block on the database; log persistence failures instead.
-function persist(promise) {
-  promise.catch((err) => console.error('presence persistence failed', err));
 }

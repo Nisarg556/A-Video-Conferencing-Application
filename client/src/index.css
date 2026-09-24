@@ -415,95 +415,522 @@ select.input {
 /* ---------- Controls ---------- */
 
 .control {
+  position: relative;
   display: inline-flex;
+  flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 6px;
-  min-width: 44px;
-  height: 44px;
-  padding: 0 12px;
+  gap: 2px;
+  min-width: 56px;
+  min-height: 48px; /* comfortable touch target */
+  padding: 6px 10px;
   border: 0;
-  border-radius: 999px;
+  border-radius: 12px;
   background: var(--secondary);
   color: var(--text);
   font: inherit;
+  font-size: 0.75rem;
   font-weight: 600;
   cursor: pointer;
 }
-.control:hover {
+.control:hover:not(:disabled) {
   background: var(--secondary-hover);
 }
-.control:focus-visible {
+.control:focus-visible,
+.icon-button:focus-visible,
+.tab:focus-visible,
+.link-button:focus-visible {
   outline: 2px solid var(--primary);
   outline-offset: 2px;
+}
+.control:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 .control-off {
   background: var(--danger);
   color: #fff;
 }
-.control-off:hover {
+.control-off:hover:not(:disabled) {
   background: var(--danger);
   filter: brightness(1.1);
+}
+.control-active {
+  background: var(--primary);
+  color: var(--primary-text);
+}
+.control-active:hover:not(:disabled) {
+  background: var(--primary-hover);
 }
 .control-danger {
   background: var(--danger);
   color: #fff;
-  padding: 0 18px;
 }
-.control-danger:hover {
+.control-danger:hover:not(:disabled) {
   background: var(--danger);
   filter: brightness(1.1);
+}
+.control-badge {
+  position: absolute;
+  top: 2px;
+  right: 6px;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: 999px;
+  background: var(--danger);
+  color: #fff;
+  font-size: 0.6875rem;
+  line-height: 18px;
+}
+
+/* Lobby preview toolbar uses compact round controls */
+.preview-toolbar .control {
+  min-width: 44px;
+  min-height: 44px;
+  border-radius: 999px;
+}
+
+.icon-button {
+  display: inline-grid;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+  flex: none;
+  border: 0;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--text);
+  cursor: pointer;
+}
+.icon-button:hover:not(:disabled) {
+  background: var(--secondary);
+}
+.icon-button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.icon-button-primary {
+  background: var(--primary);
+  color: var(--primary-text);
+}
+.icon-button-primary:hover:not(:disabled) {
+  background: var(--primary-hover);
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 12px;
+  border-radius: 999px;
+  background: var(--primary);
+  color: var(--primary-text);
+  font-size: 0.875rem;
+  font-weight: 600;
 }
 
 /* ---------- Room ---------- */
 
+/* The meeting uses the full window width, not the 1040px content column. */
+.main:has(.room) {
+  max-width: 1600px;
+  padding-top: 16px;
+  padding-bottom: 16px;
+}
+
 .room {
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: 12px;
+  min-height: calc(100vh - 56px - 32px - 50px);
 }
 
 .room-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
+  gap: 8px 16px;
+  flex-wrap: wrap;
+}
+.room-title {
+  min-width: 0;
+}
+.room-title h1 {
+  font-size: 1.25rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.room-header-status {
+  display: flex;
+  gap: 8px;
   flex-wrap: wrap;
 }
 
-.tile-grid {
-  display: grid;
+.room-body {
+  flex: 1;
+  display: flex;
   gap: 12px;
-  grid-template-columns: repeat(auto-fit, minmax(min(100%, 320px), 1fr));
-}
-.tile-grid[data-count='1'] {
-  grid-template-columns: minmax(0, 760px);
-  justify-content: center;
+  min-height: 0;
 }
 
-.invite-card {
-  max-width: 560px;
-  margin: 0 auto;
-  width: 100%;
+.stage {
+  flex: 1;
+  min-width: 0;
   display: flex;
   flex-direction: column;
   gap: 12px;
 }
 
-.control-bar {
-  position: sticky;
-  bottom: 16px;
+.tile-grid {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 300px), 1fr));
+  align-content: start;
+}
+.tile-grid[data-count='1'] {
+  grid-template-columns: minmax(0, 760px);
+  justify-content: center;
+}
+.tile-grid[data-count='2'] {
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 340px), 1fr));
+}
+
+/* Active speaker: a clear ring that doesn't change the layout. */
+.tile {
+  transition: box-shadow 150ms ease;
+}
+.tile.speaking {
+  box-shadow: 0 0 0 3px #22c55e;
+}
+
+/* Presentation mode: the screen large, everyone else in a strip. */
+.presentation {
   display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.presentation-main .tile-screen {
+  aspect-ratio: 16 / 9;
+  max-height: calc(100vh - 360px);
+  width: 100%;
+}
+.tile-screen video {
+  object-fit: contain; /* never crop someone's slides */
+  background: #000;
+}
+.filmstrip {
+  display: flex;
+  gap: 10px;
+  overflow-x: auto;
+  padding-bottom: 4px;
+}
+.filmstrip .tile {
+  flex: 0 0 200px;
+}
+.filmstrip .tile-label {
+  font-size: 0.75rem;
+}
+
+.presenting-card {
+  aspect-ratio: 16 / 9;
+  max-height: calc(100vh - 360px);
+  display: flex;
+  flex-direction: column;
   align-items: center;
   justify-content: center;
-  flex-wrap: wrap;
-  gap: 10px;
+  gap: 12px;
+  border-radius: var(--radius);
+  background: var(--stage);
+  color: var(--on-stage);
+  text-align: center;
+  font-size: 1.125rem;
+}
+
+.invite-card {
+  max-width: 560px;
+  width: 100%;
   margin: 0 auto;
-  padding: 10px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.room-alerts {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.room-alerts:empty {
+  display: none;
+}
+
+.control-bar {
+  position: sticky;
+  bottom: 12px;
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  padding: 8px 12px;
   border: 1px solid var(--border);
-  border-radius: 999px;
+  border-radius: 16px;
   background: var(--surface);
   box-shadow: 0 4px 16px rgb(16 24 40 / 0.12);
+}
+.control-group {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+@media (max-width: 640px) {
+  .control-label {
+    display: none;
+  }
+  .control {
+    min-width: 48px;
+  }
+  .control-bar {
+    justify-content: center;
+    bottom: 8px;
+  }
+  .filmstrip .tile {
+    flex-basis: 140px;
+  }
+}
+
+/* ---------- Side panel (people / chat) ---------- */
+
+.side-panel {
+  width: 340px;
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  max-height: calc(100vh - 56px - 170px);
+  position: sticky;
+  top: 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  overflow: hidden;
+}
+/* Phones and small tablets: a full-screen sheet over the call. */
+@media (max-width: 900px) {
+  .side-panel {
+    position: fixed;
+    inset: 0;
+    z-index: 20;
+    width: auto;
+    max-height: none;
+    border-radius: 0;
+    border: 0;
+  }
+}
+
+.side-panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 8px 0 12px;
+  border-bottom: 1px solid var(--border);
+}
+.tabs {
+  display: flex;
+  gap: 4px;
+}
+.tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 10px 12px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: none;
+  color: var(--muted);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+.tab[aria-selected='true'] {
+  color: var(--text);
+  border-bottom-color: var(--primary);
+}
+.tab-badge {
+  min-width: 18px;
+  padding: 0 5px;
+  border-radius: 999px;
+  background: var(--danger);
+  color: #fff;
+  font-size: 0.6875rem;
+  line-height: 18px;
+}
+.side-panel-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.people-list {
+  list-style: none;
+  margin: 0;
+  padding: 8px;
+  overflow-y: auto;
+}
+.person {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px;
+  border-radius: 8px;
+}
+.person-avatar {
+  width: 32px;
+  height: 32px;
+  flex: none;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  background: #2b3240;
+  color: #e8eaee;
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+.person-avatar.speaking {
+  box-shadow: 0 0 0 2px #22c55e;
+}
+.person-name {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.person-status {
+  display: flex;
+  gap: 6px;
+  color: var(--muted);
+}
+
+.chat {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.chat-policy {
+  padding: 8px 12px;
+  font-size: 0.75rem;
+  border-bottom: 1px solid var(--border);
+}
+.chat-messages {
+  flex: 1;
+  min-height: 160px;
+  margin: 0;
+  padding: 12px;
+  list-style: none;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.chat-empty {
+  margin: auto;
+  text-align: center;
+}
+.chat-message {
+  max-width: 85%;
+  align-self: flex-start;
+  margin-top: 8px;
+}
+.chat-message.grouped {
+  margin-top: 2px;
+}
+.chat-message.mine {
+  align-self: flex-end;
+  text-align: right;
+}
+.chat-meta {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  font-size: 0.75rem;
+  color: var(--muted);
+}
+.chat-message.mine .chat-meta {
+  justify-content: flex-end;
+}
+.chat-sender {
+  font-weight: 600;
+  color: var(--text);
+}
+.chat-text {
+  display: inline-block;
+  padding: 6px 10px;
+  border-radius: 12px;
+  background: var(--secondary);
+  text-align: left;
+  white-space: pre-wrap; /* keep the sender's line breaks */
+  overflow-wrap: anywhere; /* long URLs don't break the layout */
+}
+.chat-message.mine .chat-text {
+  background: var(--primary);
+  color: var(--primary-text);
+}
+.chat-message.pending .chat-text {
+  opacity: 0.6;
+}
+.chat-message.failed .chat-text {
+  outline: 1px solid var(--danger);
+}
+.chat-state {
+  display: block;
+  font-size: 0.75rem;
+}
+.chat-form {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 8px;
+  padding: 10px;
+  border-top: 1px solid var(--border);
+}
+.chat-input {
+  flex: 1;
+  resize: none;
+  max-height: 120px;
+  field-sizing: content; /* grows with the text where supported */
+}
+.chat-remaining {
+  width: 100%;
+  font-size: 0.75rem;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tile,
+  .mic-level-bar {
+    transition: none;
+  }
 }
 
 .tile-status {

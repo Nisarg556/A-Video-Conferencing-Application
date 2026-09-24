@@ -4,9 +4,9 @@ A Zoom-style video conferencing app: create a meeting, share a link, and talk in
 
 **Stack:** React 19 + Vite · Node + Express 5 · MongoDB (Mongoose) · Zod validation · Socket.IO signaling · WebRTC mesh
 
-> **Status:** Group video calls work for up to 4 people: create a meeting, share the link, preview
-> camera/mic, join, see and hear everyone, toggle mic/camera, survive reconnects, leave or end for all.
-> Next milestones: screen share and in-meeting chat.
+> **Status:** MVP complete. Group video calls for up to 4 people with camera/mic toggles, screen
+> sharing, in-meeting chat, active-speaker highlight, reconnect handling, and a responsive,
+> keyboard-accessible meeting UI. Next: deployment with TURN, then an SFU as a stretch goal.
 
 ---
 
@@ -18,12 +18,12 @@ A Zoom-style video conferencing app: create a meeting, share a link, and talk in
 │   ├── src/
 │   │   ├── api/                    fetch wrapper + API calls (ApiError mirrors server errors)
 │   │   ├── components/
-│   │   │   ├── meeting/            PreJoin (lobby), MeetingRoom
+│   │   │   ├── meeting/            PreJoin, MeetingRoom, ControlBar, SidePanel, ChatPanel, PeopleList
 │   │   │   └── ...                 VideoTile, MediaControls, MicLevel, CopyLink, StatusMessage
-│   │   ├── hooks/                  useMeeting, useLocalMedia (camera/mic), useMeetingRoom (presence)
+│   │   ├── hooks/                  useLocalMedia, useMeetingRoom, useScreenShare, useChat, useActiveSpeaker
 │   │   ├── lib/
 │   │   │   ├── call/               CallManager (mesh) + PeerLink (one RTCPeerConnection) + tests
-│   │   │   └── ...                 meeting codes, media error messages, socket, storage
+│   │   │   └── ...                 screenShare, chatState, activeSpeaker (+ tests), media errors, socket
 │   │   ├── pages/                  Home, Meeting, Left, NotFound, RouteError
 │   │   └── router.jsx
 │   └── vite.config.js              dev proxy: /api and /socket.io → server
@@ -33,7 +33,8 @@ A Zoom-style video conferencing app: create a meeting, share a link, and talk in
 │   │   ├── lib/                    AppError, crypto (codes, secrets), JWT tokens, domain events
 │   │   ├── middleware/             validate (Zod), auth (participant token), rate limits, errors
 │   │   ├── modules/meetings/       Meeting + Participant models · schemas · service · routes
-│   │   ├── realtime/               Socket.IO presence + signaling relay, RoomManager, STUN/TURN config
+│   │   ├── modules/chat/           Message model · service · history route
+│   │   ├── realtime/               Socket.IO presence, signaling, chat + screen-share handlers, STUN/TURN
 │   │   ├── app.js                  builds the Express app (no listen → testable)
 │   │   └── index.js                HTTP + Socket.IO server, graceful shutdown
 │   └── tests/                      Vitest + Supertest + socket.io-client + in-memory MongoDB
@@ -151,7 +152,8 @@ All errors share one shape (REST and Socket.IO acks):
 | `POST` | `/api/meetings` | – | `{ title?: string ≤ 80 }` | `201 { meeting, joinUrl, hostKey }` |
 | `GET` | `/api/meetings/:code` | – | – | `200 { meeting }` (ended meetings: `status: "ended"`) |
 | `POST` | `/api/meetings/:code/join` | – | `{ displayName: 1–40 chars, hostKey? }` | `200 { participant, token, rtcConfig, meeting }` |
-| `POST` | `/api/meetings/:code/end` | Bearer host token | – | `204` |
+| `GET` | `/api/meetings/:code/messages` | Bearer participant token | `?before=<iso>&limit=1–100` | `200 { messages }` oldest first · `410` after the meeting ends |
+| `POST` | `/api/meetings/:code/end` | Bearer host token | – | `204` (also deletes the meeting's chat) |
 
 `meeting` = `{ code, title, status, endedReason?, maxParticipants, participantCount, createdAt }`
 `participant` = `{ id, displayName, role: "host" | "guest" }`
@@ -169,6 +171,13 @@ All errors share one shape (REST and Socket.IO acks):
 | S→C | `peer:left` | `{ participantId }` |
 | S→C | `peer:media` | `{ participantId, audio, video }` |
 | S→C | `signal` | `{ from, connectionId, type, sdp?, candidate? }` |
+| C→S (ack) | `screen:start` | → `{ ok: true }` or `SCREEN_SHARE_BUSY` / `NOT_IN_MEETING` |
+| C→S | `screen:stop` | – |
+| S→C | `presenter:changed` | `{ participantId \| null }` |
+| C→S (ack) | `chat:send` | `{ text ≤ 1000, clientMsgId }` → `{ ok: true, message }` or `VALIDATION_ERROR` / `RATE_LIMITED` / `NOT_IN_MEETING` |
+| S→C | `chat:message` | `{ id, participantId, senderName, text, clientMsgId, createdAt }` |
+
+The `room:join` ack also includes `presenterId`, so late joiners immediately see who is presenting.
 | S→C | `meeting:ended` | `{ reason: "host_ended" \| "expired" }` |
 | S→C | `session:replaced` | – (same participant connected from another tab) |
 
@@ -212,11 +221,55 @@ TURN relays real bandwidth, so it must not be an open relay:
 
 Each participant uploads one copy of their video per other participant, so upload bandwidth and CPU grow with N−1. The server caps meetings at 4; beyond ~5 people an SFU (e.g. LiveKit or mediasoup) is the right architecture, and `CallManager` is the seam where it would plug in.
 
+## Screen sharing
+
+- **Media**: the screen track *replaces* the outgoing camera track on every peer connection (`replaceTrack`), so starting/stopping needs no renegotiation; the camera track goes back when sharing stops (or nothing, if the camera was off). `contentHint = "detail"` keeps text sharp.
+- **One presenter at a time, decided by the server** (`screen:start` claims the slot; a second person gets `SCREEN_SHARE_BUSY: "Ada is already presenting"`). The UI also disables Share with that reason.
+- **One stop path**: the app's Stop button, the **browser's native "Stop sharing" bar** (the track's `ended` event), leaving, and losing the slot all run the same `stop()`: stop the capture, swap the camera back, tell the server.
+- **Presentation layout**: the screen is shown large and uncropped (`object-fit: contain`, not mirrored) with everyone else in a filmstrip. The presenter sees a "You're presenting" card instead of their own screen, which would otherwise mirror itself endlessly when sharing this tab.
+
+| Failure case | Behaviour | Tested in |
+| --- | --- | --- |
+| User closes the screen picker | Silently cancelled; nothing claimed | `client/src/lib/screenShare.test.js` |
+| OS blocks capture (macOS Screen Recording) | Explains how to allow it | `screenShare.test.js` |
+| Someone else is presenting | Capture stopped immediately (no stray "sharing" indicator), message shown | `screenShare.test.js`, `server/tests/screenShare.test.js` |
+| Server unreachable when starting | Capture stopped, error shown | `screenShare.test.js` |
+| "Stop sharing" clicked while the claim is in flight | Slot released, nothing shared | `screenShare.test.js` |
+| Browser's native "Stop sharing" | Same clean stop as the app button | `screenShare.test.js` + manual |
+| Presenter closes the tab | Server frees the slot and tells everyone | `server/tests/screenShare.test.js` |
+| Presenter's connection drops and returns | Presenter kept; client re-claims idempotently after rejoin | `server/tests/screenShare.test.js` |
+| Mobile browsers without `getDisplayMedia` | Share button hidden | – |
+
+## Chat
+
+**Scope**: messages are sent over the meeting's Socket.IO room only; the sender's name/id come from their token; history requires a token for *that* meeting.
+
+**Persistence policy**: messages are stored in MongoDB **for the lifetime of the meeting**, so people who join late, reload or reconnect see earlier messages. They are **deleted when the meeting ends** (host ends it, or it expires), after which history returns `410`. A 7-day TTL index is a backstop for meetings nobody ever ends. The chat panel states this policy to users.
+
+| Failure case | Behaviour | Tested in |
+| --- | --- | --- |
+| Message sent to another meeting / by a non-member | Impossible: server routes by the sender's token; non-joined sockets get `NOT_IN_MEETING` | `server/tests/chat.test.js` |
+| Empty, > 1000 chars, control chars, bidi overrides | `VALIDATION_ERROR`; emoji (incl. ZWJ sequences) allowed | `chat.test.js` |
+| HTML/script in a message | Stored as-is, rendered as text by React (never `innerHTML`) | `chat.test.js` + manual |
+| Flooding | 5 messages / 5 s per person, then `RATE_LIMITED` | `chat.test.js` |
+| Ack lost / offline while sending | Message marked "Not sent · Retry"; retry reuses the `clientMsgId`, so no duplicate even if the first attempt was stored | `chat.test.js`, `chatState.test.js` |
+| Reconnect | History re-fetched and merged without duplicates | `chatState.test.js` |
+| Meeting ended | Messages deleted, history `410` | `chat.test.js` |
+
+## Meeting UI and accessibility
+
+- **Layouts**: gallery grid; presentation (screen + filmstrip); side panel with **People** and **Chat** tabs (a full-screen sheet below 900 px). Controls are icon + label, icon-only on phones, with ≥ 44 px touch targets.
+- **Participant names** on every tile and in the People list, with host badge, muted/camera-off/presenting icons.
+- **Active speaker**: green ring on the tile (and People avatar). Remote levels come from the RTP receivers (`getSynchronizationSources()`), your own from a Web Audio analyser. A detector with a threshold, 1.2 s hold and 1.5× switch ratio avoids flicker (`activeSpeaker.test.js`).
+- **Empty states**: "You're the only one here" + invite link; "No messages yet"; "Connecting…/Reconnecting…" per tile and for the meeting.
+- **Keyboard**: every control is a native `<button>` with a visible focus ring; toggles use `aria-pressed`, panel buttons `aria-expanded`; the side panel follows the WAI-ARIA tabs pattern (←/→), `Esc` closes it and focus returns to the button that opened it; in chat, Enter sends and Shift+Enter adds a line. Chat is an `aria-live` log; unread count is part of the Chat button's accessible name.
+
 ## Data model
 
 - **Meeting** — `code` (unique), `title`, `hostKeyHash` (never returned), `status` (`active`/`ended`), `endedReason`, `maxParticipants`, `lastActiveAt`, `endedAt`, `expiresAt` (TTL index).
 - **Participant** — one per join: `meetingId`, `displayName`, `role`, `joinedAt`, `leftAt`.
-- **Live presence** — in memory (`RoomManager`): `code → participantId → { displayName, role, socketId }`.
+- **Message** — `meetingId`, `participantId`, `senderName` (denormalized), `text`, `clientMsgId` (unique per participant), `createdAt`, `expiresAt` (TTL backstop). Deleted when the meeting ends.
+- **Live presence** — in memory (`RoomManager`): `code → participantId → { displayName, role, socketId, media }`, plus `code → presenterId`.
 
 ## Design notes
 
@@ -239,6 +292,10 @@ Each participant uploads one copy of their video per other participant, so uploa
 6. Restart the API mid-call (`Ctrl+C`, then `npm run dev`): "Reconnecting…" appears, then the call recovers by itself.
 7. Join from a phone on mobile data (needs the app deployed over HTTPS or a tunnel). Without TURN this may stay on "Connecting…"; with TURN configured it connects.
 8. `chrome://webrtc-internals` (or `about:webrtc` in Firefox) shows each connection's state, the selected candidate pair (`host`/`srflx`/`relay`) and bitrate.
+9. **Screen share**: click Share, pick a window. Others see it large with "<name> is presenting"; their Share button is disabled. Stop it with the **browser's own "Stop sharing" bar**: your camera returns for everyone. Share again and close that window instead: the others return to the gallery.
+10. **Chat**: with the panel closed on one side, send from the other: the Chat button shows an unread badge. Try Shift+Enter for a new line, a 1000+ character message, and `<b>hi</b>` (shown literally). Reload one window: earlier messages are still there. End the meeting: the chat is gone.
+11. **Keyboard only**: Tab through the controls, open Chat with Enter, type and send, press Esc — focus returns to the Chat button.
+12. **Phone width** (DevTools device toolbar): controls become icon-only, the side panel becomes full-screen.
 
 ## Troubleshooting
 

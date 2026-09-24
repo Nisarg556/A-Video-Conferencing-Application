@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { CHAT_MAX_LENGTH } from '../modules/chat/message.model.js';
 
 // Real SDP for one audio + one video transceiver is ~3–10 KB; the cap stops
 // anyone using the relay to push large payloads through other participants.
@@ -16,6 +17,25 @@ export const mediaStateSchema = z.object({
 export const joinPayloadSchema = z
   .object({ media: mediaStateSchema.default({ audio: false, video: false }) })
   .default({});
+
+// Chat text: newlines and tabs are fine; other control characters and bidi
+// overrides (which can make text display differently from what was sent) are not.
+// Emoji joiners (U+200D) are allowed, so family/skin-tone emoji still work.
+const CHAT_TEXT_ALLOWED = /^(?:[^\p{Cc}‪-‮⁦-⁩]|[\n\t])*$/u;
+
+export const chatSendSchema = z.object({
+  text: z
+    .string()
+    .transform((text) => text.replace(/\r\n?/g, '\n').trim())
+    .pipe(
+      z
+        .string()
+        .min(1, 'Message is empty')
+        .max(CHAT_MAX_LENGTH, `Messages can be at most ${CHAT_MAX_LENGTH} characters`)
+        .regex(CHAT_TEXT_ALLOWED, 'Message contains invalid characters'),
+    ),
+  clientMsgId: z.string().regex(/^[A-Za-z0-9_-]{8,64}$/, 'Invalid clientMsgId'),
+});
 
 const description = (type) =>
   z.object({
