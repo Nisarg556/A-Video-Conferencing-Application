@@ -12,7 +12,7 @@ import { toPublicPeer, toPublicWaiting } from './roomManager.js';
 import { joinPayloadSchema, mediaStateSchema, signalSchema } from './schemas.js';
 import { registerScreenShareHandlers } from './screenShareHandlers.js';
 import { logger } from '../lib/logger.js';
-import { ackFrom, createRateLimiter, fail, failFromError, persist } from './socketUtils.js';
+import { ackFrom, createRateLimiter, fail, failFromError, persist, persistInOrder } from './socketUtils.js';
 
 // A connection setup is 1 offer/answer + a few dozen ICE candidates per peer;
 // this leaves plenty of room for 3 peers + ICE restarts while stopping floods.
@@ -149,7 +149,8 @@ export function attachSocketServer(httpServer, { rooms }) {
         // the newcomer's offer (the newcomer always initiates).
         socket.to(meetingRoom(me.code)).emit('peer:joined', toPublicPeer(peer));
 
-        persist(
+        // Ordered per participant: a quick leave must never be overwritten by this write.
+        persistInOrder(me.participantId, () =>
           Participant.updateOne(
             { _id: me.participantId },
             { leftAt: null, ...(!participant.enteredAt && { enteredAt: new Date() }) },
@@ -233,7 +234,8 @@ export function attachSocketServer(httpServer, { rooms }) {
       }
       socket.to(meetingRoom(me.code)).emit('peer:left', { participantId: me.participantId });
       logger.info({ code: me.code, participantId: me.participantId }, 'left meeting');
-      persist(Participant.updateOne({ _id: me.participantId }, { leftAt: new Date() }));
+      const leftAt = new Date();
+      persistInOrder(me.participantId, () => Participant.updateOne({ _id: me.participantId }, { leftAt }));
       persist(touchMeeting(me.meetingId));
     }
   });

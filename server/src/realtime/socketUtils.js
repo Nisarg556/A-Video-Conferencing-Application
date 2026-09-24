@@ -42,3 +42,23 @@ export function failFromError(err, context) {
   logger.error({ err, ...context }, 'socket handler failed');
   return fail('INTERNAL_ERROR', 'Something went wrong');
 }
+
+const writeQueues = new Map(); // key -> tail promise
+
+/**
+ * Runs background writes for one key (a participant) strictly in order.
+ * Presence events for the same person (join → leave → rejoin) can happen
+ * within milliseconds; unordered fire-and-forget writes could land in the
+ * wrong order and, e.g., overwrite "left at" with the earlier "joined".
+ */
+export function persistInOrder(key, task) {
+  const previous = writeQueues.get(key) ?? Promise.resolve();
+  const next = previous
+    .then(task)
+    .catch((err) => logger.error({ err, key }, 'background persistence failed'));
+  writeQueues.set(key, next);
+  next.then(() => {
+    if (writeQueues.get(key) === next) writeQueues.delete(key); // don't grow forever
+  });
+  return next;
+}

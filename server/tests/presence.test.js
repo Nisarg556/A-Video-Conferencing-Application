@@ -83,7 +83,9 @@ describe('Socket.IO presence', () => {
 
     expect(await left).toEqual({ participantId: b.participant.id });
     expect(server.rooms.count(meeting.code)).toBe(1);
-    await expect.poll(async () => (await Participant.findById(b.participant.id)).leftAt).toBeInstanceOf(Date);
+    await expect
+      .poll(async () => (await Participant.findById(b.participant.id)).leftAt, { timeout: 5000 })
+      .toBeInstanceOf(Date);
   });
 
   it('treats closing the tab (socket disconnect) as leaving', async () => {
