@@ -4,6 +4,7 @@ import { MeetingRoom } from '../components/meeting/MeetingRoom.jsx';
 import { PreJoin } from '../components/meeting/PreJoin.jsx';
 import { StatusMessage } from '../components/StatusMessage.jsx';
 import { useLocalMedia } from '../hooks/useLocalMedia.js';
+import { useDocumentTitle } from '../hooks/useDocumentTitle.js';
 import { useMeeting } from '../hooks/useMeeting.js';
 import { isValidMeetingCode, parseMeetingInput } from '../lib/meetingCode.js';
 
@@ -35,6 +36,7 @@ export function MeetingPage() {
 function MeetingFlow({ code }) {
   const navigate = useNavigate();
   const { status, meeting, error } = useMeeting(code);
+  useDocumentTitle(meeting ? meeting.title || 'Untitled meeting' : 'Meeting');
   const [session, setSession] = useState(null);
   const [endedMessage, setEndedMessage] = useState(null);
 

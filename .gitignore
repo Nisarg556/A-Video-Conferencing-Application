@@ -5,3 +5,5 @@ coverage/
 .env.local
 *.log
 .DS_Store
+e2e/test-results/
+e2e/report/

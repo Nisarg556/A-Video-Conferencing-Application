@@ -33,6 +33,13 @@ class FakeSender {
     this.track = track;
     this.replaced.push(track);
   }
+  getParameters() {
+    // Browsers return no encodings until the connection is negotiated.
+    return structuredClone(this.parameters ?? { encodings: [] });
+  }
+  async setParameters(params) {
+    this.parameters = structuredClone(params);
+  }
 }
 
 class FakeTransceiver {

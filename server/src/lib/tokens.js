@@ -5,11 +5,14 @@ import { AppError } from './AppError.js';
 // Two kinds of token, told apart by their audience so one can never be used
 // as the other:
 //  - session:     "this browser is signed in as user X" (httpOnly cookie, 7 days)
-//  - participant: "this person is in meeting M with role R" (Bearer + socket auth, 2 h)
+//  - participant: "this person is in meeting M with role R" (Bearer + socket auth, 12 h)
 const ALGORITHM = 'HS256';
 const PARTICIPANT_AUDIENCE = 'confer:participant';
 const SESSION_AUDIENCE = 'confer:session';
-export const PARTICIPANT_TOKEN_TTL = '2h';
+// Long enough for any realistic meeting, so a reconnect late in a long call
+// still works. Safe because admission (removed/denied/locked) is re-checked in
+// the database on every use, not trusted from the token.
+export const PARTICIPANT_TOKEN_TTL_SECONDS = 12 * 60 * 60;
 export const SESSION_TTL_SECONDS = 7 * 24 * 60 * 60;
 
 export function signParticipantToken({ participantId, meetingId, code, role, displayName }) {
@@ -17,7 +20,7 @@ export function signParticipantToken({ participantId, meetingId, code, role, dis
     algorithm: ALGORITHM,
     audience: PARTICIPANT_AUDIENCE,
     subject: participantId,
-    expiresIn: PARTICIPANT_TOKEN_TTL,
+    expiresIn: PARTICIPANT_TOKEN_TTL_SECONDS,
   });
 }
 

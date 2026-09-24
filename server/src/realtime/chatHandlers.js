@@ -2,7 +2,7 @@ import { can } from '../lib/permissions.js';
 import { postMessage } from '../modules/chat/chat.service.js';
 import { meetingRoom } from './channels.js';
 import { chatSendSchema } from './schemas.js';
-import { ackFrom, createRateLimiter, fail } from './socketUtils.js';
+import { ackFrom, createRateLimiter, fail, failFromError } from './socketUtils.js';
 
 const CHAT_LIMIT = { max: 5, windowMs: 5000 };
 
@@ -39,8 +39,7 @@ export function registerChatHandlers({ socket, me, isJoined }) {
       if (created) socket.to(meetingRoom(me.code)).emit('chat:message', payload);
       reply({ ok: true, message: payload });
     } catch (err) {
-      console.error('chat:send failed', err);
-      reply(fail('INTERNAL_ERROR', 'Message could not be sent'));
+      reply(failFromError(err, { event: 'chat:send', code: me.code }));
     }
   });
 }

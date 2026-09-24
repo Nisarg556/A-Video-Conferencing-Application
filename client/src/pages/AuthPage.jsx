@@ -1,10 +1,12 @@
 import { useState } from 'react';
 import { Link, Navigate, useNavigate, useSearchParams } from 'react-router';
 import { safeNextPath, useAuth } from '../auth/AuthContext.jsx';
+import { useDocumentTitle } from '../hooks/useDocumentTitle.js';
 
 /** Sign in and sign up share one form; `mode` switches the fields and copy. */
 export function AuthPage({ mode }) {
   const isSignUp = mode === 'signup';
+  useDocumentTitle(isSignUp ? 'Create account' : 'Sign in');
   const auth = useAuth();
   const navigate = useNavigate();
   const [params] = useSearchParams();

@@ -7,7 +7,7 @@ export function notFoundHandler(req, _res, next) {
 
 // Every error leaves the API in the same shape:
 //   { "error": { "code": "SOME_CODE", "message": "...", "details": [...]? } }
-// eslint-disable-next-line no-unused-vars
+// Unexpected (500) errors also carry the request id, to find the full log line.
 export function errorHandler(err, req, res, _next) {
   let status = 500;
   let code = 'INTERNAL_ERROR';
@@ -26,9 +26,11 @@ export function errorHandler(err, req, res, _next) {
     message = 'Request body is too large';
   } else {
     // Unexpected: log the full error server-side, never leak it to clients.
-    console.error(`[${req.method} ${req.originalUrl}]`, err);
+    req.log?.error({ err }, 'unhandled error');
     if (!env.isProduction) message = err.message || message;
   }
 
-  res.status(status).json({ error: { code, message, ...(details && { details }) } });
+  res.status(status).json({
+    error: { code, message, ...(details && { details }), ...(status >= 500 && req.id && { requestId: req.id }) },
+  });
 }

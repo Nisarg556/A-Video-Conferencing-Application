@@ -1,5 +1,10 @@
 import { PeerLink } from './PeerLink.js';
 
+// Per-connection video cap by number of other people. Upload grows with N−1
+// in a mesh, so 3 × 0.7 Mbps ≈ 2.1 Mbps total instead of 3 × 2.5+ uncapped.
+export const VIDEO_BITRATE_BY_PEERS = { 1: 1_500_000, 2: 1_000_000, 3: 700_000 };
+const MIN_VIDEO_BITRATE = 500_000;
+
 function newConnectionId() {
   return crypto.randomUUID().replace(/-/g, '');
 }
@@ -38,6 +43,7 @@ export class CallManager {
     for (const participantId of participantIds) {
       this.#createLink(participantId, newConnectionId(), 'offerer').start();
     }
+    this.#updateBitrates();
     this.onChange();
   }
 
@@ -53,6 +59,7 @@ export class CallManager {
     if (message.type === 'offer' && link?.connectionId !== connectionId) {
       link?.close();
       link = this.#createLink(from, connectionId, 'answerer');
+      this.#updateBitrates();
       this.onChange();
     }
 
@@ -66,6 +73,7 @@ export class CallManager {
     if (!link) return;
     link.close();
     this.#links.delete(participantId);
+    this.#updateBitrates();
     this.onChange();
   }
 
@@ -90,6 +98,11 @@ export class CallManager {
   getPeer(participantId) {
     const link = this.#links.get(participantId);
     return link ? { stream: link.remoteStream, connectionState: link.connectionState } : null;
+  }
+
+  #updateBitrates() {
+    const cap = VIDEO_BITRATE_BY_PEERS[this.#links.size] ?? MIN_VIDEO_BITRATE;
+    for (const link of this.#links.values()) link.setMaxVideoBitrate(cap);
   }
 
   #createLink(participantId, connectionId, role) {

@@ -3,6 +3,7 @@ import { endMeeting } from '../../api/meetings.js';
 import { useActiveSpeaker } from '../../hooks/useActiveSpeaker.js';
 import { useChat } from '../../hooks/useChat.js';
 import { useMeetingRoom } from '../../hooks/useMeetingRoom.js';
+import { useParticipantAnnouncements } from '../../hooks/useParticipantAnnouncements.js';
 import { CopyLink } from '../CopyLink.jsx';
 import { LockIcon, ScreenShareIcon } from '../icons.jsx';
 import { RemoteAudio } from '../RemoteAudio.jsx';
@@ -61,6 +62,8 @@ export function MeetingRoom({ meeting, session, media, onExit }) {
     self: room.self,
     visible: panel === 'chat',
   });
+
+  const announcement = useParticipantAnnouncements(room.peers, room.status === 'joined');
 
   const speakerId = useActiveSpeaker({
     enabled: room.status === 'joined' && room.peers.length > 0,
@@ -341,6 +344,10 @@ export function MeetingRoom({ meeting, session, media, onExit }) {
       />
 
       {room.peers.map((peer) => peer.stream && <RemoteAudio key={peer.participantId} stream={peer.stream} />)}
+
+      <p className="sr-only" role="status" aria-live="polite">
+        {announcement}
+      </p>
     </div>
   );
 }

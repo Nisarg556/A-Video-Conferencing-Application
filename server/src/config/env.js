@@ -39,6 +39,9 @@ const envSchema = z
     TURN_USERNAME: optionalString,
     TURN_CREDENTIAL: optionalString,
     ICE_TRANSPORT_POLICY: z.enum(['all', 'relay']).default('all'),
+
+    // Defaults: "silent" in tests, "info" otherwise.
+    LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace', 'silent']).optional(),
   })
   .superRefine((cfg, ctx) => {
     if (cfg.TURN_URLS.length > 0 && !cfg.TURN_SECRET && !(cfg.TURN_USERNAME && cfg.TURN_CREDENTIAL)) {
@@ -70,6 +73,7 @@ if (!parsed.success) {
 
 export const env = Object.freeze({
   ...parsed.data,
+  LOG_LEVEL: parsed.data.LOG_LEVEL ?? (parsed.data.NODE_ENV === 'test' ? 'silent' : 'info'),
   CLIENT_URL: parsed.data.CLIENT_URL.replace(/\/$/, ''),
   isProduction: parsed.data.NODE_ENV === 'production',
 });

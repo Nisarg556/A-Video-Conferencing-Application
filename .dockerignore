@@ -1,0 +1,11 @@
+**/node_modules
+client/dist
+coverage
+e2e
+.git
+.github
+.claude
+**/.env
+**/.env.*
+!**/.env.example
+*.log

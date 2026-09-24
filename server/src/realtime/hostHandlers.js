@@ -6,7 +6,8 @@ import { updateSettings } from '../modules/meetings/meeting.service.js';
 import { Participant } from '../modules/meetings/participant.model.js';
 import { lobbyRoom, meetingRoom } from './channels.js';
 import { toPublicWaiting } from './roomManager.js';
-import { ackFrom, fail } from './socketUtils.js';
+import { ackFrom, fail, failFromError } from './socketUtils.js';
+import { logger } from '../lib/logger.js';
 
 const targetSchema = z.object({ participantId: z.string().regex(/^[a-f0-9]{24}$/) });
 
@@ -33,10 +34,11 @@ export function registerHostHandlers({ io, socket, me, rooms, isJoined, notifyHo
       const parsed = schema.safeParse(args[0]);
       if (!parsed.success) return reply(fail('VALIDATION_ERROR', parsed.error.issues[0].message));
       try {
-        reply(await action(parsed.data));
+        const result = await action(parsed.data);
+        if (result.ok) logger.info({ event, code: me.code, by: me.participantId, ...parsed.data }, 'host action');
+        reply(result);
       } catch (err) {
-        console.error(`${event} failed`, err);
-        reply(fail('INTERNAL_ERROR', 'Something went wrong'));
+        reply(failFromError(err, { event, code: me.code }));
       }
     });
   }

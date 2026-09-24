@@ -2,11 +2,13 @@ import { useEffect, useState } from 'react';
 import { Link, Navigate } from 'react-router';
 import { getMeetingHistory } from '../api/meetings.js';
 import { useAuth } from '../auth/AuthContext.jsx';
+import { useDocumentTitle } from '../hooks/useDocumentTitle.js';
 
 const dateFormat = new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' });
 
 /** Meetings the signed-in user hosted or attended. */
 export function HistoryPage() {
+  useDocumentTitle('My meetings');
   const auth = useAuth();
   const [state, setState] = useState({ status: 'loading', meetings: [], error: null });
 

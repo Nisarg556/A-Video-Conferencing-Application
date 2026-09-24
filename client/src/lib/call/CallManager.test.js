@@ -208,3 +208,45 @@ describe('CallManager', () => {
     expect(sent.filter((m) => m.type === 'offer')).toHaveLength(2);
   });
 });
+
+describe('mesh bandwidth', () => {
+  const videoCap = (pc) => pc.transceivers[1].sender.parameters?.encodings?.[0]?.maxBitrate;
+  const negotiate = (pc) => {
+    pc.transceivers[1].sender.parameters = { encodings: [{}] };
+    pc.setConnectionState('connected');
+  };
+
+  it('caps outgoing video per connection, tighter as the meeting grows', async () => {
+    const { manager } = createManager();
+    manager.connectToAll(['alice']);
+    await flush();
+    const [first] = FakePeerConnection.instances;
+    negotiate(first);
+    await flush();
+    expect(videoCap(first)).toBe(1_500_000);
+
+    // Two more people arrive: every connection is re-capped.
+    manager.handleSignal({ from: 'bob', connectionId: 'conn-bob-1', type: 'offer', sdp: 'o' });
+    manager.handleSignal({ from: 'cy', connectionId: 'conn-cy-01', type: 'offer', sdp: 'o' });
+    await flush();
+    for (const pc of FakePeerConnection.instances) negotiate(pc);
+    await flush();
+    expect(FakePeerConnection.instances.map(videoCap)).toEqual([700_000, 700_000, 700_000]);
+
+    // Someone leaves: the cap relaxes again.
+    manager.removePeer('cy');
+    await flush();
+    expect(videoCap(first)).toBe(1_000_000);
+  });
+
+  it('waits for negotiation before applying the cap', async () => {
+    const { manager } = createManager();
+    manager.connectToAll(['alice']);
+    await flush();
+    const [pc] = FakePeerConnection.instances;
+    expect(videoCap(pc)).toBeUndefined(); // no encodings yet: nothing to set
+    negotiate(pc);
+    await flush();
+    expect(videoCap(pc)).toBe(1_500_000);
+  });
+});

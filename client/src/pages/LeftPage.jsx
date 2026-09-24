@@ -1,5 +1,6 @@
 import { useLocation, useParams } from 'react-router';
 import { StatusMessage } from '../components/StatusMessage.jsx';
+import { useDocumentTitle } from '../hooks/useDocumentTitle.js';
 
 const MESSAGES = {
   left: { title: 'You left the meeting', body: null, canRejoin: true },
@@ -27,6 +28,7 @@ export function LeftPage() {
   const { code } = useParams();
   const { state } = useLocation();
   const message = MESSAGES[state?.reason] ?? MESSAGES.left;
+  useDocumentTitle(message.title);
 
   return (
     <StatusMessage

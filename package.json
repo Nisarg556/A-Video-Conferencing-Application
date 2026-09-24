@@ -7,7 +7,7 @@
     "server"
   ],
   "engines": {
-    "node": ">=20.6"
+    "node": ">=22.12"
   },
   "scripts": {
     "dev": "concurrently -n server,client -c blue,magenta \"npm run dev -w server\" \"npm run dev -w client\"",
@@ -15,9 +15,18 @@
     "start": "npm run start -w server",
     "test": "npm test --workspaces",
     "db:up": "docker compose up -d mongo",
-    "db:down": "docker compose down"
+    "db:down": "docker compose down",
+    "lint": "eslint .",
+    "test:e2e": "npm run build && playwright test"
   },
   "devDependencies": {
-    "concurrently": "^9.1.0"
-  }
+    "@eslint/js": "^9.39.5",
+    "@playwright/test": "^1.63.0",
+    "concurrently": "^9.1.0",
+    "eslint": "^9.39.5",
+    "eslint-plugin-react": "^7.37.5",
+    "eslint-plugin-react-hooks": "^7.1.1",
+    "globals": "^17.12.0"
+  },
+  "type": "module"
 }

@@ -23,6 +23,7 @@ export class PeerLink {
   #iceRestarts = 0;
   #disconnectTimer = null;
   #closed = false;
+  #maxVideoBitrate = null;
 
   constructor({
     participantId,
@@ -84,6 +85,30 @@ export class PeerLink {
     const sender = this.#senders[kind];
     if (!sender || this.#closed) return; // answerer before the offer: attached in #applySignal
     sender.replaceTrack(track).catch((err) => console.warn(`replaceTrack(${kind}) failed`, err));
+  }
+
+  /**
+   * Caps our outgoing video on this connection (bits/s). In a mesh we upload
+   * one copy per person, so the cap shrinks as the meeting grows (see
+   * CallManager). Applied now if negotiated, otherwise once connected.
+   */
+  setMaxVideoBitrate(bitsPerSecond) {
+    this.#maxVideoBitrate = bitsPerSecond;
+    this.#applyVideoBitrate();
+  }
+
+  async #applyVideoBitrate() {
+    const sender = this.#senders.video;
+    if (!sender?.getParameters || this.#closed || this.#maxVideoBitrate == null) return;
+    const params = sender.getParameters();
+    if (!params.encodings?.length) return; // not negotiated yet
+    if (params.encodings[0].maxBitrate === this.#maxVideoBitrate) return;
+    params.encodings[0].maxBitrate = this.#maxVideoBitrate;
+    try {
+      await sender.setParameters(params);
+    } catch (err) {
+      console.warn('setParameters(maxBitrate) failed', err);
+    }
   }
 
   /**
@@ -167,6 +192,7 @@ export class PeerLink {
 
     if (state === 'connected') {
       this.#iceRestarts = 0;
+      this.#applyVideoBitrate();
     } else if (state === 'failed') {
       this.#restartIce();
     } else if (state === 'disconnected') {

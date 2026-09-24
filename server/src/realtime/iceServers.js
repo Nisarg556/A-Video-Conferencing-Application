@@ -1,9 +1,11 @@
 import { createHmac } from 'node:crypto';
 import { env } from '../config/env.js';
+import { PARTICIPANT_TOKEN_TTL_SECONDS } from '../lib/tokens.js';
 
-// Long enough to outlive a participant token (2 h) so a call never loses its
-// relay mid-meeting; short enough that a leaked credential soon stops working.
-export const TURN_CREDENTIAL_TTL_SECONDS = 3 * 60 * 60;
+// Outlives the participant token, because coturn re-checks credentials when a
+// relay allocation is refreshed: an expired credential would drop a relayed
+// call mid-meeting. Still bounded, so a leaked credential stops working.
+export const TURN_CREDENTIAL_TTL_SECONDS = PARTICIPANT_TOKEN_TTL_SECONDS + 60 * 60;
 
 /**
  * RTCPeerConnection configuration handed to a participant when they join.

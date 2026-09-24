@@ -11,7 +11,8 @@ import { lobbySnapshot, registerHostHandlers } from './hostHandlers.js';
 import { toPublicPeer, toPublicWaiting } from './roomManager.js';
 import { joinPayloadSchema, mediaStateSchema, signalSchema } from './schemas.js';
 import { registerScreenShareHandlers } from './screenShareHandlers.js';
-import { ackFrom, createRateLimiter, fail, persist } from './socketUtils.js';
+import { logger } from '../lib/logger.js';
+import { ackFrom, createRateLimiter, fail, failFromError, persist } from './socketUtils.js';
 
 // A connection setup is 1 offer/answer + a few dozen ICE candidates per peer;
 // this leaves plenty of room for 3 peers + ICE restarts while stopping floods.
@@ -99,6 +100,7 @@ export function attachSocketServer(httpServer, { rooms }) {
           socket.join(lobbyRoom(me.code));
           reply({ ok: true, waiting: true, settings: meeting.toPublic().settings });
           notifyHosts(me.code);
+          logger.info({ code: me.code, participantId: me.participantId, role: me.role }, 'waiting for admission');
           return;
         }
 
@@ -139,6 +141,10 @@ export function attachSocketServer(httpServer, { rooms }) {
         }
 
         reply({ ok: true, ...snapshot(meeting) });
+        logger.info(
+          { code: me.code, participantId: me.participantId, role: me.role, replaced: Boolean(existing) },
+          'joined meeting',
+        );
         // Others close any old connection to this participant and wait for
         // the newcomer's offer (the newcomer always initiates).
         socket.to(meetingRoom(me.code)).emit('peer:joined', toPublicPeer(peer));
@@ -151,8 +157,7 @@ export function attachSocketServer(httpServer, { rooms }) {
         );
         persist(touchMeeting(me.meetingId));
       } catch (err) {
-        console.error('room:join failed', err);
-        reply(fail('INTERNAL_ERROR', 'Could not join the meeting'));
+        reply(failFromError(err, { event: 'room:join', code: me.code }));
       }
     });
 
@@ -227,6 +232,7 @@ export function attachSocketServer(httpServer, { rooms }) {
         socket.to(meetingRoom(me.code)).emit('presenter:changed', { participantId: null });
       }
       socket.to(meetingRoom(me.code)).emit('peer:left', { participantId: me.participantId });
+      logger.info({ code: me.code, participantId: me.participantId }, 'left meeting');
       persist(Participant.updateOne({ _id: me.participantId }, { leftAt: new Date() }));
       persist(touchMeeting(me.meetingId));
     }
@@ -235,6 +241,7 @@ export function attachSocketServer(httpServer, { rooms }) {
   // A meeting ended via REST (host) or expiry: tell everyone (including the
   // waiting room), then disconnect them.
   const onMeetingEnded = ({ code, reason }) => {
+    logger.info({ code, reason }, 'meeting ended');
     io.to(meetingRoom(code)).to(lobbyRoom(code)).emit('meeting:ended', { reason });
     io.in(meetingRoom(code)).disconnectSockets(true);
     io.in(lobbyRoom(code)).disconnectSockets(true);

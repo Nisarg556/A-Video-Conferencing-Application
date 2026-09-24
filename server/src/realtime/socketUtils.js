@@ -1,4 +1,6 @@
 // Small helpers shared by the Socket.IO handlers.
+import { AppError } from '../lib/AppError.js';
+import { logger } from '../lib/logger.js';
 
 /** The ack callback is the last argument if the client asked for one. */
 export function ackFrom(args) {
@@ -28,5 +30,15 @@ export function createRateLimiter({ max, windowMs }) {
 
 /** Fire-and-forget DB writes must not crash the socket handler; log instead. */
 export function persist(promise) {
-  promise.catch((err) => console.error('background persistence failed', err));
+  promise.catch((err) => logger.error({ err }, 'background persistence failed'));
+}
+
+/**
+ * Turns an exception from a handler into an ack: expected AppErrors keep
+ * their code (e.g. MEETING_ENDED); anything else is logged and hidden.
+ */
+export function failFromError(err, context) {
+  if (err instanceof AppError) return fail(err.code, err.message);
+  logger.error({ err, ...context }, 'socket handler failed');
+  return fail('INTERNAL_ERROR', 'Something went wrong');
 }

@@ -3,8 +3,10 @@ import { Link, useNavigate } from 'react-router';
 import { createMeeting } from '../api/meetings.js';
 import { useAuth } from '../auth/AuthContext.jsx';
 import { MEETING_TITLE_MAX, parseMeetingInput } from '../lib/meetingCode.js';
+import { useDocumentTitle } from '../hooks/useDocumentTitle.js';
 
 export function HomePage() {
+  useDocumentTitle(null);
   return (
     <>
       <section className="hero">

@@ -312,3 +312,37 @@ describe('ending the meeting', () => {
     expect(await ended).toEqual({ reason: 'host_ended' });
   });
 });
+
+describe('chat history respects admission', () => {
+  const history = (code, token) =>
+    request(server.app).get(`/api/meetings/${code}/messages`).set('Authorization', `Bearer ${token}`);
+
+  it('is hidden from people in the waiting room, and from denied or removed people', async () => {
+    const { code, host } = await meetingWithHost({ waitingRoom: true });
+    await emitWithAck(host.socket, 'chat:send', { text: 'confidential', clientMsgId: 'client-msg-9' });
+
+    // Waiting: holds a valid token for this meeting, but isn't admitted.
+    const waiting = await enter(code, 'Waiting');
+    const res = await history(code, waiting.token);
+    expect(res.status).toBe(403);
+    expect(res.body.error.code).toBe('NOT_ADMITTED');
+
+    // Admitted: can read.
+    await emitWithAck(host.socket, 'lobby:admit', { participantId: waiting.id });
+    expect((await history(code, waiting.token)).body.messages.map((m) => m.text)).toEqual(['confidential']);
+
+    // Removed: can't read any more.
+    await emitWithAck(waiting.socket, 'room:join', {});
+    await emitWithAck(host.socket, 'participant:remove', { participantId: waiting.id });
+    expect((await history(code, waiting.token)).status).toBe(403);
+  });
+});
+
+describe('host actions on an ended meeting', () => {
+  it('answer MEETING_ENDED instead of a generic error', async () => {
+    const { code, host } = await meetingWithHost();
+    await Meeting.updateOne({ code }, { status: 'ended' }); // ended elsewhere a moment ago
+    const res = await emitWithAck(host.socket, 'meeting:update', { locked: true });
+    expect(res.error.code).toBe('MEETING_ENDED');
+  });
+});
